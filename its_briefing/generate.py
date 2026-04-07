@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
 from its_briefing import config, fetch, llm, storage
 from its_briefing.models import Briefing
 
@@ -15,6 +17,7 @@ logger = logging.getLogger(__name__)
 def run(cache_dir: Optional[Path] = None) -> Optional[Briefing]:
     """Run the full briefing pipeline. Returns the saved Briefing or None on failure."""
     try:
+        load_dotenv()
         settings = config.Settings.from_env()
         sources = config.load_sources()
         categories = config.load_categories()

@@ -1,12 +1,12 @@
 """Tests for its_briefing.llm."""
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from pytest_httpx import HTTPXMock
 
 from its_briefing.config import Category, Settings
-from its_briefing.llm import classify_article
-from its_briefing.models import Article
+from its_briefing.llm import build_summary, classify_article
+from its_briefing.models import Article, ExecutiveSummary
 
 
 def _article() -> Article:
@@ -81,11 +81,6 @@ def test_classify_article_http_error_falls_back(httpx_mock: HTTPXMock) -> None:
     result = classify_article(_article(), _categories(), _settings())
 
     assert result == "Uncategorized"
-
-
-from datetime import date
-from its_briefing.llm import build_summary
-from its_briefing.models import Bullet, ExecutiveSummary
 
 
 def _articles() -> list[Article]:

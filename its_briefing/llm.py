@@ -101,6 +101,6 @@ def build_summary(
     for attempt in (1, 2):
         try:
             return _try_build_summary(articles, settings)
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValidationError) as exc:
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValidationError) as exc:
             logger.warning("Summary attempt %d failed: %s", attempt, exc)
     return ExecutiveSummary.placeholder(target_date)

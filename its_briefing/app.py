@@ -3,19 +3,17 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 from flask import Flask, jsonify, render_template
 
 from its_briefing import generate, scheduler, storage
-from its_briefing.config import Settings, load_categories, load_sources
+from its_briefing.config import load_categories, load_sources
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(settings: Optional[Settings] = None) -> Flask:
+def create_app() -> Flask:
     """Application factory."""
-    settings = settings or Settings.from_env()
     app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 
     categories = load_categories()

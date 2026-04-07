@@ -35,7 +35,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, _graceful_exit)
     signal.signal(signal.SIGTERM, _graceful_exit)
 
-    app = create_app(settings)
+    app = create_app()
     app.run(host=settings.flask_host, port=settings.flask_port, debug=False, use_reloader=False)
 
 
