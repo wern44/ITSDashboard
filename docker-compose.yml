@@ -1,0 +1,34 @@
+services:
+  its-briefing:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: its-briefing:latest
+    container_name: its-briefing
+    restart: unless-stopped
+
+    # Port nur an localhost — Nginx auf dem Host macht das Routing
+    ports:
+      - "127.0.0.1:8089:8089"
+
+    # Bind-mounts: Config (read-only) und Cache (read-write) leben im Host-Dateisystem
+    volumes:
+      - /srv/apps/its-briefing/config:/app/config:ro
+      - /srv/apps/its-briefing/cache:/app/cache
+
+    # .env wird vom Host gelesen, NICHT ins Image gebacken
+    env_file:
+      - /srv/apps/its-briefing/.env
+
+    # Override FLASK_HOST so the app binds to all interfaces inside the
+    # container; the host-side `127.0.0.1:8089:8089` mapping still keeps
+    # it accessible only from the host's localhost.
+    environment:
+      FLASK_HOST: "0.0.0.0"
+
+    # Logs gehen via Docker an json-file mit Rotation
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
