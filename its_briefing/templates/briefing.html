@@ -26,7 +26,7 @@
       {% if briefing %}
         <div class="mt-4 flex flex-wrap gap-2 text-xs">
           <span class="px-2 py-1 rounded bg-slate-800 text-slate-300">{{ briefing.article_count }} articles</span>
-          <span class="px-2 py-1 rounded bg-slate-800 text-slate-300">19 sources</span>
+          <span class="px-2 py-1 rounded bg-slate-800 text-slate-300">{{ source_count }} sources</span>
           {% if briefing.failed_sources %}
             <span class="px-2 py-1 rounded bg-red-900/40 text-red-300" title="{{ briefing.failed_sources | join(', ') }}">
               {{ briefing.failed_sources | length }} failed

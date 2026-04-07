@@ -8,7 +8,7 @@ from typing import Optional
 from flask import Flask, jsonify, render_template
 
 from its_briefing import generate, scheduler, storage
-from its_briefing.config import Settings, load_categories
+from its_briefing.config import Settings, load_categories, load_sources
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +19,17 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
     app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 
     categories = load_categories()
+    source_count = len(load_sources())
     category_colors = {c.name: c.color for c in categories}
 
     @app.route("/")
     def index() -> str:
         briefing = storage.latest_briefing()
         return render_template(
-            "briefing.html", briefing=briefing, category_colors=category_colors
+            "briefing.html",
+            briefing=briefing,
+            category_colors=category_colors,
+            source_count=source_count,
         )
 
     @app.route("/health")
