@@ -59,12 +59,13 @@ git clone <git-url> repo
 cd repo
 
 # 3. Persistente Verzeichnisse + Initial-Config
-mkdir -p ../config ../cache
-cp config/sources.yaml config/categories.yaml ../config/
-cp .env.example ../.env
+mkdir -p /srv/apps/its-briefing/config /srv/apps/its-briefing/cache
+cp config/sources.yaml     /srv/apps/its-briefing/config/
+cp config/categories.yaml  /srv/apps/its-briefing/config/
+cp .env.example            /srv/apps/its-briefing/.env
 
 # 4. .env editieren — vor allem OLLAMA_BASE_URL auf den GPU-Server setzen
-vim ../.env
+vim /srv/apps/its-briefing/.env
 
 # 5. Container bauen + starten
 docker compose up -d --build
@@ -135,6 +136,24 @@ If the container is `unhealthy`:
 1. Check `docker compose logs` for Python tracebacks
 2. Verify `OLLAMA_BASE_URL` in `.env` points at a reachable Ollama server (`curl $OLLAMA_BASE_URL/api/tags` from the host)
 3. Verify the `config/` and `cache/` host directories exist and are owned by UID 1000
+
+### Host UID assumption
+
+The container runs as user `app` (UID 1000). On a default single-user Debian install this matches the operator's host user, so bind-mounted files in `cache/` are readable from the host without permission gymnastics. **Before deploying, verify your host UID:**
+
+```bash
+id $USER
+# Expected: uid=1000(...) gid=1000(...) ...
+```
+
+If your UID is not 1000, files written by the container will appear "owned by nobody" from the host. Two options:
+
+1. **Quickest:** add yourself to a group with GID 1000 and adjust the host directory permissions:
+   ```bash
+   sudo chown -R 1000:1000 /srv/apps/its-briefing/cache
+   sudo chown -R 1000:1000 /srv/apps/its-briefing/config
+   ```
+2. **Cleaner (future):** rebuild the image with a build arg overriding the UID. Not yet implemented in this Dockerfile.
 
 ## Conventions for Additional Apps
 
