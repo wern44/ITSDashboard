@@ -4,9 +4,10 @@ from pathlib import Path
 
 import pytest
 from freezegun import freeze_time
+from pytest_httpx import HTTPXMock
 
 from its_briefing.config import Source
-from its_briefing.fetch import parse_feed_bytes
+from its_briefing.fetch import fetch_all, parse_feed_bytes
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_feed.xml"
 
@@ -32,3 +33,36 @@ def test_parse_malformed_feed_returns_empty() -> None:
     articles = parse_feed_bytes(b"<not-xml>", source, now=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc))
 
     assert articles == []
+
+
+@freeze_time("2026-04-07 12:00:00", tz_offset=0)
+def test_fetch_all_aggregates_articles(httpx_mock: HTTPXMock) -> None:
+    raw = FIXTURE.read_bytes()
+    httpx_mock.add_response(url="https://a.example/feed", content=raw)
+    httpx_mock.add_response(url="https://b.example/feed", content=raw)
+
+    sources = [
+        Source(name="A", url="https://a.example/feed", lang="EN"),
+        Source(name="B", url="https://b.example/feed", lang="DE"),
+    ]
+    articles, failed = fetch_all(sources)
+
+    assert failed == []
+    assert len(articles) == 2  # one recent article per feed
+    assert {a.source for a in articles} == {"A", "B"}
+
+
+@freeze_time("2026-04-07 12:00:00", tz_offset=0)
+def test_fetch_all_records_failures(httpx_mock: HTTPXMock) -> None:
+    raw = FIXTURE.read_bytes()
+    httpx_mock.add_response(url="https://ok.example/feed", content=raw)
+    httpx_mock.add_response(url="https://broken.example/feed", status_code=500)
+
+    sources = [
+        Source(name="OK", url="https://ok.example/feed", lang="EN"),
+        Source(name="Broken", url="https://broken.example/feed", lang="EN"),
+    ]
+    articles, failed = fetch_all(sources)
+
+    assert "Broken" in failed
+    assert any(a.source == "OK" for a in articles)

@@ -61,3 +61,42 @@ def parse_feed_bytes(raw: bytes, source: Source, now: datetime) -> list[Article]
             )
         )
     return articles
+
+
+def _fetch_one(client: httpx.Client, source: Source, now: datetime) -> tuple[list[Article], Optional[str]]:
+    """Fetch a single feed. Returns (articles, failed_source_name_or_None)."""
+    try:
+        response = client.get(source.url, timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=True)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning("Fetch failed for %s: %s", source.name, exc)
+        return [], source.name
+
+    try:
+        articles = parse_feed_bytes(response.content, source, now=now)
+    except Exception as exc:  # noqa: BLE001 — feedparser can raise odd things
+        logger.warning("Parse failed for %s: %s", source.name, exc)
+        return [], source.name
+
+    return articles, None
+
+
+def fetch_all(sources: list[Source]) -> tuple[list[Article], list[str]]:
+    """Concurrently fetch all sources. Returns (articles, failed_source_names)."""
+    now = datetime.now(timezone.utc)
+    articles: list[Article] = []
+    failed: list[str] = []
+
+    with httpx.Client(headers={"User-Agent": "ITS-Briefing/0.1"}) as client:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            future_to_source = {
+                executor.submit(_fetch_one, client, source, now): source for source in sources
+            }
+            for future in as_completed(future_to_source):
+                got_articles, failure = future.result()
+                articles.extend(got_articles)
+                if failure:
+                    failed.append(failure)
+
+    articles.sort(key=lambda a: a.published, reverse=True)
+    return articles, failed
