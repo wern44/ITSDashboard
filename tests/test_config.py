@@ -1,0 +1,80 @@
+"""Tests for its_briefing.config."""
+from pathlib import Path
+
+import pytest
+
+from its_briefing.config import Category, Settings, Source, load_categories, load_sources
+
+
+def test_load_sources_parses_yaml(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "sources.yaml"
+    yaml_file.write_text(
+        """
+sources:
+  - name: "Test Feed"
+    url: "https://example.com/feed"
+    lang: "EN"
+""".strip()
+    )
+
+    sources = load_sources(yaml_file)
+
+    assert len(sources) == 1
+    assert isinstance(sources[0], Source)
+    assert sources[0].name == "Test Feed"
+    assert sources[0].url == "https://example.com/feed"
+    assert sources[0].lang == "EN"
+
+
+def test_load_categories_parses_yaml(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "categories.yaml"
+    yaml_file.write_text(
+        """
+categories:
+  - name: "Hacks"
+    description: "Confirmed breaches"
+    color: "#ef4444"
+""".strip()
+    )
+
+    categories = load_categories(yaml_file)
+
+    assert len(categories) == 1
+    assert isinstance(categories[0], Category)
+    assert categories[0].name == "Hacks"
+    assert categories[0].color == "#ef4444"
+
+
+def test_settings_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:7b")
+    monkeypatch.setenv("FLASK_PORT", "9000")
+
+    settings = Settings.from_env()
+
+    assert settings.ollama_model == "qwen2.5:7b"
+    assert settings.flask_port == 9000
+
+
+def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in (
+        "OLLAMA_BASE_URL",
+        "OLLAMA_MODEL",
+        "TIMEZONE",
+        "SCHEDULE_HOUR",
+        "SCHEDULE_MINUTE",
+        "FLASK_HOST",
+        "FLASK_PORT",
+        "LOG_LEVEL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    settings = Settings.from_env()
+
+    assert settings.ollama_base_url == "http://localhost:11434"
+    assert settings.ollama_model == "llama3.1:8b"
+    assert settings.timezone == "Europe/Berlin"
+    assert settings.schedule_hour == 6
+    assert settings.schedule_minute == 0
+    assert settings.flask_host == "127.0.0.1"
+    assert settings.flask_port == 8089
+    assert settings.log_level == "INFO"
