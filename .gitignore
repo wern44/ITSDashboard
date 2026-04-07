@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Environment
+.env
+
+# Cache (runtime briefings)
+cache/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Pytest
+.pytest_cache/
