@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Source(BaseModel):
@@ -21,8 +22,15 @@ class Category(BaseModel):
 
 
 class Settings(BaseModel):
-    ollama_base_url: str
-    ollama_model: str
+    # Legacy aliases (ollama_base_url / ollama_model) accepted as constructor kwargs
+    # for backwards compatibility with older tests / fixtures. Prefer the canonical
+    # llm_base_url / llm_model names. Read-side legacy access is provided via the
+    # @property shims below.
+    model_config = ConfigDict(populate_by_name=True)
+
+    llm_provider: Literal["ollama", "lmstudio"] = "ollama"
+    llm_base_url: str = Field(alias="ollama_base_url")
+    llm_model: str = Field(alias="ollama_model")
     timezone: str
     schedule_hour: int
     schedule_minute: int
@@ -30,11 +38,33 @@ class Settings(BaseModel):
     flask_port: int
     log_level: str
 
+    @property
+    def ollama_base_url(self) -> str:
+        return self.llm_base_url
+
+    @property
+    def ollama_model(self) -> str:
+        return self.llm_model
+
     @classmethod
     def from_env(cls) -> "Settings":
+        provider = os.environ.get("LLM_PROVIDER", "ollama")
+        if provider not in ("ollama", "lmstudio"):
+            raise ValueError(f"LLM_PROVIDER must be 'ollama' or 'lmstudio', got {provider!r}")
+        base_url = (
+            os.environ.get("LLM_BASE_URL")
+            or os.environ.get("OLLAMA_BASE_URL")
+            or "http://localhost:11434"
+        )
+        model = (
+            os.environ.get("LLM_MODEL")
+            or os.environ.get("OLLAMA_MODEL")
+            or "llama3.1:8b"
+        )
         return cls(
-            ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-            ollama_model=os.environ.get("OLLAMA_MODEL", "llama3.1:8b"),
+            llm_provider=provider,
+            llm_base_url=base_url,
+            llm_model=model,
             timezone=os.environ.get("TIMEZONE", "Europe/Berlin"),
             schedule_hour=int(os.environ.get("SCHEDULE_HOUR", "6")),
             schedule_minute=int(os.environ.get("SCHEDULE_MINUTE", "0")),

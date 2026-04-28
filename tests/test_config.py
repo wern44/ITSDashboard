@@ -78,3 +78,40 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.flask_host == "127.0.0.1"
     assert settings.flask_port == 8089
     assert settings.log_level == "INFO"
+
+
+def test_settings_from_env_uses_new_llm_keys(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "lmstudio")
+    monkeypatch.setenv("LLM_BASE_URL", "http://192.168.32.231:1234")
+    monkeypatch.setenv("LLM_MODEL", "google/gemma-4-26b-a4b")
+    s = Settings.from_env()
+    assert s.llm_provider == "lmstudio"
+    assert s.llm_base_url == "http://192.168.32.231:1234"
+    assert s.llm_model == "google/gemma-4-26b-a4b"
+
+
+def test_settings_from_env_falls_back_to_legacy_ollama_keys(monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://legacy:11434")
+    monkeypatch.setenv("OLLAMA_MODEL", "llama3.1:8b")
+    s = Settings.from_env()
+    assert s.llm_provider == "ollama"  # default
+    assert s.llm_base_url == "http://legacy:11434"
+    assert s.llm_model == "llama3.1:8b"
+
+
+def test_settings_provider_must_be_known(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "bogus")
+    with pytest.raises(ValueError):
+        Settings.from_env()
+
+
+def test_settings_defaults_llm(monkeypatch):
+    for k in ("LLM_PROVIDER","LLM_BASE_URL","LLM_MODEL","OLLAMA_BASE_URL","OLLAMA_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    s = Settings.from_env()
+    assert s.llm_provider == "ollama"
+    assert s.llm_base_url == "http://localhost:11434"
+    assert s.llm_model == "llama3.1:8b"
