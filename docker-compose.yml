@@ -7,9 +7,9 @@ services:
     container_name: its-briefing
     restart: unless-stopped
 
-    # Port nur an localhost — Nginx auf dem Host macht das Routing
+    # Port auf allen Interfaces — direkter LAN-Zugriff (kein Nginx davor)
     ports:
-      - "127.0.0.1:8089:8089"
+      - "8089:8089"
 
     # Bind-mounts: Config (read-only) und Cache (read-write) liegen
     # neben der docker-compose.yml im geklonten Repo. So bleibt alles —
