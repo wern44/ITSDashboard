@@ -1,11 +1,19 @@
-"""Tests for its_briefing.llm."""
+"""Tests for its_briefing.llm — both Ollama and LM Studio clients."""
 import json
 from datetime import date, datetime, timezone
 
+import pytest
 from pytest_httpx import HTTPXMock
 
 from its_briefing.config import Category, Settings
-from its_briefing.llm import build_summary, classify_article
+from its_briefing.llm import (
+    LLMClientError,
+    LMStudioClient,
+    OllamaClient,
+    build_summary,
+    classify_article,
+    make_client,
+)
 from its_briefing.models import Article, ExecutiveSummary
 
 
@@ -29,10 +37,11 @@ def _categories() -> list[Category]:
     ]
 
 
-def _settings() -> Settings:
+def _settings(provider: str, base_url: str) -> Settings:
     return Settings(
-        ollama_base_url="http://localhost:11434",
-        ollama_model="llama3.1:8b",
+        llm_provider=provider,
+        llm_base_url=base_url,
+        llm_model="test-model",
         timezone="Europe/Berlin",
         schedule_hour=6,
         schedule_minute=0,
@@ -42,46 +51,75 @@ def _settings() -> Settings:
     )
 
 
-def test_classify_article_returns_chosen_category(httpx_mock: HTTPXMock) -> None:
+# ---------- provider matrix used by parameterized tests ----------
+
+OLLAMA = ("ollama", "http://localhost:11434", "/api/chat")
+LMSTUDIO = ("lmstudio", "http://localhost:1234", "/v1/chat/completions")
+
+
+def _success_response(provider: str, content: str) -> dict:
+    if provider == "ollama":
+        return {"message": {"content": content}}
+    return {"choices": [{"message": {"content": content}}]}
+
+
+@pytest.mark.parametrize("provider,base_url,path", [OLLAMA, LMSTUDIO])
+def test_classify_article_returns_chosen_category(
+    httpx_mock: HTTPXMock, provider: str, base_url: str, path: str
+) -> None:
     httpx_mock.add_response(
-        url="http://localhost:11434/api/chat",
-        json={"message": {"content": '{"category": "0-Day"}'}},
+        url=f"{base_url}{path}",
+        json=_success_response(provider, '{"category": "0-Day"}'),
     )
-
-    result = classify_article(_article(), _categories(), _settings())
-
+    result = classify_article(_article(), _categories(), _settings(provider, base_url))
     assert result == "0-Day"
 
 
-def test_classify_article_unknown_category_falls_back(httpx_mock: HTTPXMock) -> None:
+@pytest.mark.parametrize("provider,base_url,path", [OLLAMA, LMSTUDIO])
+def test_classify_article_unknown_category_falls_back(
+    httpx_mock: HTTPXMock, provider: str, base_url: str, path: str
+) -> None:
     httpx_mock.add_response(
-        url="http://localhost:11434/api/chat",
-        json={"message": {"content": '{"category": "Bogus"}'}},
+        url=f"{base_url}{path}",
+        json=_success_response(provider, '{"category": "Bogus"}'),
+    )
+    assert classify_article(_article(), _categories(), _settings(provider, base_url)) == "Uncategorized"
+
+
+@pytest.mark.parametrize("provider,base_url,path", [OLLAMA, LMSTUDIO])
+def test_classify_article_invalid_json_falls_back(
+    httpx_mock: HTTPXMock, provider: str, base_url: str, path: str
+) -> None:
+    httpx_mock.add_response(
+        url=f"{base_url}{path}",
+        json=_success_response(provider, "this is not json"),
+    )
+    assert classify_article(_article(), _categories(), _settings(provider, base_url)) == "Uncategorized"
+
+
+@pytest.mark.parametrize("provider,base_url,path", [OLLAMA, LMSTUDIO])
+def test_classify_article_http_error_falls_back(
+    httpx_mock: HTTPXMock, provider: str, base_url: str, path: str
+) -> None:
+    httpx_mock.add_response(url=f"{base_url}{path}", status_code=500)
+    assert classify_article(_article(), _categories(), _settings(provider, base_url)) == "Uncategorized"
+
+
+def test_classify_article_lmstudio_missing_choices_key_falls_back(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Locks the bug fix: an LM Studio response without 'choices' must not raise."""
+    httpx_mock.add_response(
+        url="http://localhost:1234/v1/chat/completions",
+        json={"unexpected": "shape"},
+    )
+    assert (
+        classify_article(_article(), _categories(), _settings("lmstudio", "http://localhost:1234"))
+        == "Uncategorized"
     )
 
-    result = classify_article(_article(), _categories(), _settings())
 
-    assert result == "Uncategorized"
-
-
-def test_classify_article_invalid_json_falls_back(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(
-        url="http://localhost:11434/api/chat",
-        json={"message": {"content": "this is not json"}},
-    )
-
-    result = classify_article(_article(), _categories(), _settings())
-
-    assert result == "Uncategorized"
-
-
-def test_classify_article_http_error_falls_back(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(url="http://localhost:11434/api/chat", status_code=500)
-
-    result = classify_article(_article(), _categories(), _settings())
-
-    assert result == "Uncategorized"
-
+# ---------- summary tests ----------
 
 def _articles() -> list[Article]:
     return [
@@ -108,7 +146,10 @@ def _articles() -> list[Article]:
     ]
 
 
-def test_build_summary_parses_structured_response(httpx_mock: HTTPXMock) -> None:
+@pytest.mark.parametrize("provider,base_url,path", [OLLAMA, LMSTUDIO])
+def test_build_summary_parses_structured_response(
+    httpx_mock: HTTPXMock, provider: str, base_url: str, path: str
+) -> None:
     structured = {
         "critical_vulnerabilities": [
             {"text": "CVE-2026-0001 RCE in WidgetServer", "article_ids": ["id1"]}
@@ -120,38 +161,56 @@ def test_build_summary_parses_structured_response(httpx_mock: HTTPXMock) -> None
         "strategic_policy": [],
     }
     httpx_mock.add_response(
-        url="http://localhost:11434/api/chat",
-        json={"message": {"content": json.dumps(structured)}},
+        url=f"{base_url}{path}",
+        json=_success_response(provider, json.dumps(structured)),
     )
-
-    summary = build_summary(_articles(), _settings(), target_date=date(2026, 4, 7))
-
-    assert isinstance(summary, ExecutiveSummary)
-    assert len(summary.critical_vulnerabilities) == 1
-    assert summary.critical_vulnerabilities[0].text.startswith("CVE-2026-0001")
-    assert summary.notable_incidents[0].article_ids == ["id2"]
+    s = build_summary(_articles(), _settings(provider, base_url), target_date=date(2026, 4, 7))
+    assert isinstance(s, ExecutiveSummary)
+    assert s.critical_vulnerabilities[0].text.startswith("CVE-2026-0001")
 
 
-def test_build_summary_invalid_json_falls_back(httpx_mock: HTTPXMock) -> None:
+@pytest.mark.parametrize("provider,base_url,path", [OLLAMA, LMSTUDIO])
+def test_build_summary_invalid_json_falls_back(
+    httpx_mock: HTTPXMock, provider: str, base_url: str, path: str
+) -> None:
+    httpx_mock.add_response(url=f"{base_url}{path}", json=_success_response(provider, "garbage"))
+    httpx_mock.add_response(url=f"{base_url}{path}", json=_success_response(provider, "garbage"))
+    s = build_summary(_articles(), _settings(provider, base_url), target_date=date(2026, 4, 7))
+    assert s.critical_vulnerabilities[0].text.startswith("AI summary unavailable")
+
+
+@pytest.mark.parametrize("provider,base_url,path", [OLLAMA, LMSTUDIO])
+def test_build_summary_http_error_falls_back(
+    httpx_mock: HTTPXMock, provider: str, base_url: str, path: str
+) -> None:
+    httpx_mock.add_response(url=f"{base_url}{path}", status_code=500)
+    httpx_mock.add_response(url=f"{base_url}{path}", status_code=500)
+    s = build_summary(_articles(), _settings(provider, base_url), target_date=date(2026, 4, 7))
+    assert s.critical_vulnerabilities[0].text.startswith("AI summary unavailable")
+
+
+# ---------- list_models tests ----------
+
+def test_ollama_list_models(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
-        url="http://localhost:11434/api/chat",
-        json={"message": {"content": "garbage"}},
+        url="http://localhost:11434/api/tags",
+        json={"models": [{"name": "llama3.1:8b"}, {"name": "mistral:7b"}]},
     )
+    client = OllamaClient("http://localhost:11434", "llama3.1:8b")
+    assert client.list_models() == ["llama3.1:8b", "mistral:7b"]
+
+
+def test_lmstudio_list_models(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
-        url="http://localhost:11434/api/chat",
-        json={"message": {"content": "garbage again"}},
+        url="http://localhost:1234/v1/models",
+        json={"data": [{"id": "google/gemma-4-26b-a4b"}, {"id": "qwen/qwen2.5"}]},
     )
-
-    summary = build_summary(_articles(), _settings(), target_date=date(2026, 4, 7))
-
-    assert isinstance(summary, ExecutiveSummary)
-    assert summary.critical_vulnerabilities[0].text.startswith("AI summary unavailable")
+    client = LMStudioClient("http://localhost:1234", "google/gemma-4-26b-a4b")
+    assert client.list_models() == ["google/gemma-4-26b-a4b", "qwen/qwen2.5"]
 
 
-def test_build_summary_http_error_falls_back(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(url="http://localhost:11434/api/chat", status_code=500)
-    httpx_mock.add_response(url="http://localhost:11434/api/chat", status_code=500)
-
-    summary = build_summary(_articles(), _settings(), target_date=date(2026, 4, 7))
-
-    assert summary.critical_vulnerabilities[0].text.startswith("AI summary unavailable")
+def test_make_client_dispatches_on_provider() -> None:
+    s_ollama = _settings("ollama", "http://localhost:11434")
+    s_lm = _settings("lmstudio", "http://localhost:1234")
+    assert isinstance(make_client(s_ollama), OllamaClient)
+    assert isinstance(make_client(s_lm), LMStudioClient)

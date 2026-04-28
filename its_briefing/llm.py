@@ -1,4 +1,4 @@
-"""Local Ollama client: classify articles and build executive summary."""
+"""LLM clients (Ollama + LM Studio) and the classify/summarize entry points."""
 from __future__ import annotations
 
 import json
@@ -13,26 +13,88 @@ from its_briefing.models import Article, ExecutiveSummary
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_TIMEOUT_SECONDS = 60
+LLM_TIMEOUT_SECONDS = 60
 UNCATEGORIZED = "Uncategorized"
 
 
-def _ollama_chat(prompt: str, settings: Settings) -> str:
-    """Call Ollama /api/chat with format=json. Returns the assistant content string."""
-    payload = {
-        "model": settings.ollama_model,
-        "format": "json",
-        "stream": False,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    response = httpx.post(
-        f"{settings.ollama_base_url}/api/chat",
-        json=payload,
-        timeout=OLLAMA_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data["message"]["content"]
+class LLMClientError(Exception):
+    """Raised by an LLM client when a chat call fails for any reason."""
+
+
+class OllamaClient:
+    """Client for Ollama's native /api/chat endpoint."""
+
+    def __init__(self, base_url: str, model: str) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+
+    def chat(self, prompt: str) -> str:
+        try:
+            response = httpx.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "format": "json",
+                    "stream": False,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["message"]["content"]
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            raise LLMClientError(str(exc)) from exc
+
+    def list_models(self) -> list[str]:
+        try:
+            response = httpx.get(f"{self.base_url}/api/tags", timeout=5)
+            response.raise_for_status()
+            return [m["name"] for m in response.json().get("models", [])]
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            raise LLMClientError(str(exc)) from exc
+
+
+class LMStudioClient:
+    """Client for LM Studio's OpenAI-compatible /v1/chat/completions endpoint."""
+
+    def __init__(self, base_url: str, model: str) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+
+    def chat(self, prompt: str) -> str:
+        try:
+            response = httpx.post(
+                f"{self.base_url}/v1/chat/completions",
+                json={
+                    "model": self.model,
+                    "response_format": {"type": "json_object"},
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError) as exc:
+            raise LLMClientError(str(exc)) from exc
+
+    def list_models(self) -> list[str]:
+        try:
+            response = httpx.get(f"{self.base_url}/v1/models", timeout=5)
+            response.raise_for_status()
+            return [m["id"] for m in response.json().get("data", [])]
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            raise LLMClientError(str(exc)) from exc
+
+
+LLMClient = OllamaClient | LMStudioClient
+
+
+def make_client(settings: Settings) -> LLMClient:
+    if settings.llm_provider == "ollama":
+        return OllamaClient(settings.llm_base_url, settings.llm_model)
+    return LMStudioClient(settings.llm_base_url, settings.llm_model)
 
 
 def _classification_prompt(article: Article, categories: list[Category]) -> str:
@@ -46,14 +108,17 @@ def _classification_prompt(article: Article, categories: list[Category]) -> str:
     )
 
 
-def classify_article(article: Article, categories: list[Category], settings: Settings) -> str:
+def classify_article(
+    article: Article, categories: list[Category], settings: Settings
+) -> str:
     """Classify a single article into one of the configured categories."""
     valid_names = {c.name for c in categories}
+    client = make_client(settings)
     try:
-        content = _ollama_chat(_classification_prompt(article, categories), settings)
+        content = client.chat(_classification_prompt(article, categories))
         parsed = json.loads(content)
         chosen = parsed.get("category", "")
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError) as exc:
+    except (LLMClientError, json.JSONDecodeError, KeyError, TypeError) as exc:
         logger.warning("Classification failed for %s: %s", article.id, exc)
         return UNCATEGORIZED
 
@@ -89,7 +154,8 @@ def _summary_prompt(articles: list[Article]) -> str:
 
 
 def _try_build_summary(articles: list[Article], settings: Settings) -> ExecutiveSummary:
-    content = _ollama_chat(_summary_prompt(articles), settings)
+    client = make_client(settings)
+    content = client.chat(_summary_prompt(articles))
     parsed = json.loads(content)
     return ExecutiveSummary.model_validate(parsed)
 
@@ -101,6 +167,6 @@ def build_summary(
     for attempt in (1, 2):
         try:
             return _try_build_summary(articles, settings)
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValidationError) as exc:
+        except (LLMClientError, json.JSONDecodeError, KeyError, TypeError, ValidationError) as exc:
             logger.warning("Summary attempt %d failed: %s", attempt, exc)
     return ExecutiveSummary.placeholder(target_date)
