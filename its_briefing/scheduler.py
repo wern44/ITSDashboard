@@ -56,3 +56,24 @@ def shutdown() -> None:
     if _scheduler is not None and _scheduler.running:
         _scheduler.shutdown(wait=False)
         _scheduler = None
+
+
+def reschedule(hour: int, minute: int, tz: str) -> None:
+    """Replace the daily_briefing trigger with a new cron at the given time/timezone.
+
+    Raises:
+        RuntimeError: if the scheduler is not running (call start() first).
+        ValueError: if the timezone string is not a valid IANA name (raised by CronTrigger).
+    """
+    global _scheduler
+    if _scheduler is None or not _scheduler.running:
+        raise RuntimeError("scheduler not running; call start() first")
+    trigger = CronTrigger(hour=hour, minute=minute, timezone=tz)
+    _scheduler.reschedule_job("daily_briefing", trigger=trigger)
+    logger.info(
+        "Scheduler rescheduled to %02d:%02d %s; next run %s",
+        hour,
+        minute,
+        tz,
+        _scheduler.get_job("daily_briefing").next_run_time,
+    )
