@@ -1,77 +1,127 @@
 """Tests for its_briefing.generate."""
-from datetime import date, datetime, timezone
+from __future__ import annotations
+
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
-from unittest.mock import patch
 
 import pytest
-from freezegun import freeze_time
 
-from its_briefing.config import Category, Settings, Source
-from its_briefing.generate import run
-from its_briefing.models import Article, Briefing, Bullet, ExecutiveSummary
+from its_briefing import generate
+from its_briefing.config import Settings
+from its_briefing.db import get_connection, init_schema, seed_settings_from_env
+from its_briefing.models import Article, ExecutiveSummary
 
 
-def _settings() -> Settings:
-    return Settings(
-        ollama_base_url="http://localhost:11434",
-        ollama_model="llama3.1:8b",
-        timezone="Europe/Berlin",
-        schedule_hour=6,
-        schedule_minute=0,
-        flask_host="127.0.0.1",
-        flask_port=8089,
-        log_level="INFO",
+def _seed_db(db_path: Path) -> None:
+    conn = get_connection(db_path)
+    init_schema(conn)
+    seed_settings_from_env(
+        conn,
+        Settings(
+            llm_provider="ollama",
+            llm_base_url="http://localhost:11434",
+            llm_model="llama3.1:8b",
+            timezone="Europe/Berlin",
+            schedule_hour=6,
+            schedule_minute=0,
+            flask_host="127.0.0.1",
+            flask_port=8089,
+            log_level="INFO",
+        ),
     )
+    conn.close()
 
 
-def _sample_article(idx: int) -> Article:
+def _patch_db_paths(monkeypatch, db_path: Path) -> None:
+    monkeypatch.setattr("its_briefing.db.DEFAULT_DB_PATH", db_path)
+
+
+def _make_article(id_="a1") -> Article:
     return Article(
-        id=f"id{idx}",
+        id=id_,
         source="Test",
         source_lang="EN",
-        title=f"Title {idx}",
-        link=f"https://example.com/{idx}",
+        title=f"Article {id_}",
+        link=f"https://example.com/{id_}",
         published=datetime(2026, 4, 7, 9, 0, tzinfo=timezone.utc),
-        summary="summary",
+        summary="text",
     )
 
 
-def _fake_summary() -> ExecutiveSummary:
-    return ExecutiveSummary(
-        critical_vulnerabilities=[Bullet(text="bullet", article_ids=["id1"])]
+def test_run_orchestrates_pipeline(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "test.db"
+    _seed_db(db_path)
+    _patch_db_paths(monkeypatch, db_path)
+
+    article = _make_article()
+    monkeypatch.setattr(generate.fetch, "fetch_all", lambda sources: ([article], []))
+    monkeypatch.setattr(generate.llm, "classify_article", lambda *a, **k: "0-Day")
+    monkeypatch.setattr(
+        generate.llm, "build_summary", lambda articles, settings, target_date: ExecutiveSummary()
     )
 
-
-@freeze_time("2026-04-07 06:00:00", tz_offset=0)
-def test_run_orchestrates_pipeline(tmp_path: Path) -> None:
-    sources = [Source(name="Test", url="https://example.com/feed", lang="EN")]
-    categories = [Category(name="IT-Security", description="defense")]
-    fake_articles = [_sample_article(1), _sample_article(2)]
-
-    with (
-        patch("its_briefing.generate.config.load_sources", return_value=sources),
-        patch("its_briefing.generate.config.load_categories", return_value=categories),
-        patch("its_briefing.generate.config.Settings.from_env", return_value=_settings()),
-        patch("its_briefing.generate.fetch.fetch_all", return_value=(fake_articles, ["BadFeed"])),
-        patch("its_briefing.generate.llm.classify_article", side_effect=["IT-Security", "IT-Security"]),
-        patch("its_briefing.generate.llm.build_summary", return_value=_fake_summary()),
-    ):
-        briefing = run(cache_dir=tmp_path)
-
-    assert isinstance(briefing, Briefing)
-    assert briefing.date == date(2026, 4, 7)
-    assert briefing.article_count == 2
-    assert briefing.failed_sources == ["BadFeed"]
-    assert briefing.articles[0].category == "IT-Security"
-    assert (tmp_path / "briefing-2026-04-07.json").exists()
+    briefing = generate.run()
+    assert briefing is not None
+    assert briefing.article_count == 1
+    assert briefing.articles[0].category == "0-Day"
 
 
-@freeze_time("2026-04-07 06:00:00", tz_offset=0)
-def test_run_returns_none_on_unhandled_exception(tmp_path: Path) -> None:
-    with patch(
-        "its_briefing.generate.config.load_sources", side_effect=RuntimeError("boom")
-    ):
-        result = run(cache_dir=tmp_path)
+def test_run_returns_none_on_failure(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "test.db"
+    _seed_db(db_path)
+    _patch_db_paths(monkeypatch, db_path)
 
+    def boom(*a, **k):
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr(generate.fetch, "fetch_all", boom)
+
+    result = generate.run()
     assert result is None
+
+
+def test_run_records_generation_run_on_success(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "test.db"
+    _seed_db(db_path)
+    _patch_db_paths(monkeypatch, db_path)
+
+    monkeypatch.setattr(generate.fetch, "fetch_all", lambda sources: ([], []))
+    monkeypatch.setattr(generate.llm, "classify_article", lambda *a, **k: "Uncategorized")
+    monkeypatch.setattr(
+        generate.llm, "build_summary", lambda articles, settings, target_date: ExecutiveSummary()
+    )
+
+    result = generate.run()
+    assert result is not None
+
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        "SELECT succeeded, error FROM generation_runs ORDER BY id"
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 1
+    assert rows[0]["succeeded"] == 1
+    assert rows[0]["error"] is None
+
+
+def test_run_records_failed_run_on_exception(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "test.db"
+    _seed_db(db_path)
+    _patch_db_paths(monkeypatch, db_path)
+
+    def boom(*a, **k):
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr(generate.fetch, "fetch_all", boom)
+
+    result = generate.run()
+    assert result is None
+
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        "SELECT succeeded, error FROM generation_runs ORDER BY id"
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 1
+    assert rows[0]["succeeded"] == 0
+    assert "synthetic failure" in rows[0]["error"]
