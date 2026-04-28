@@ -125,3 +125,19 @@ def test_run_records_failed_run_on_exception(tmp_path: Path, monkeypatch) -> Non
     assert len(rows) == 1
     assert rows[0]["succeeded"] == 0
     assert "synthetic failure" in rows[0]["error"]
+
+
+def test_run_returns_none_when_db_setup_fails(tmp_path: Path, monkeypatch) -> None:
+    """If the DB setup itself fails, run() must still return None — never propagate."""
+    db_path = tmp_path / "test.db"
+    _seed_db(db_path)
+    _patch_db_paths(monkeypatch, db_path)
+
+    # Force config.Settings.from_env to blow up during setup
+    def boom_from_env():
+        raise RuntimeError("setup synthetic failure")
+
+    monkeypatch.setattr("its_briefing.config.Settings.from_env", boom_from_env)
+
+    result = generate.run()
+    assert result is None
