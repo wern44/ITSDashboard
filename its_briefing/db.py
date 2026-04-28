@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date as date_type, datetime
+from datetime import date as date_type, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -256,3 +256,36 @@ def latest_briefing(conn: sqlite3.Connection) -> Optional[Briefing]:
         failed_sources=json.loads(row["failed_sources"]),
         article_count=len(articles),
     )
+
+
+def record_run_start(conn: sqlite3.Connection) -> int:
+    """Insert a generation_runs row for the start of a pipeline run, return its id."""
+    started = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        "INSERT INTO generation_runs (started_at) VALUES (?)", (started,)
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def record_run_finish(
+    conn: sqlite3.Connection,
+    run_id: int,
+    *,
+    succeeded: bool,
+    article_count: Optional[int],
+    error: Optional[str],
+) -> None:
+    """Update a run row with the outcome at the end of the pipeline."""
+    conn.execute(
+        "UPDATE generation_runs SET finished_at = ?, succeeded = ?, article_count = ?, error = ? "
+        "WHERE id = ?",
+        (
+            datetime.now(timezone.utc).isoformat(),
+            1 if succeeded else 0,
+            article_count,
+            error,
+            run_id,
+        ),
+    )
+    conn.commit()

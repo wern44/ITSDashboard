@@ -13,6 +13,8 @@ from its_briefing.db import (
     get_settings,
     init_schema,
     latest_briefing as db_latest_briefing,
+    record_run_finish,
+    record_run_start,
     save_briefing as db_save_briefing,
     seed_settings_from_env,
     update_settings,
@@ -199,4 +201,50 @@ def test_latest_briefing_returns_none_when_empty(tmp_path: Path) -> None:
     conn = get_connection(tmp_path / "t.db")
     init_schema(conn)
     assert db_latest_briefing(conn) is None
+    conn.close()
+
+
+def test_record_run_start_returns_id(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    run_id = record_run_start(conn)
+    assert isinstance(run_id, int)
+    row = conn.execute(
+        "SELECT started_at, finished_at, succeeded FROM generation_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row["started_at"] is not None
+    assert row["finished_at"] is None
+    assert row["succeeded"] is None
+    conn.close()
+
+
+def test_record_run_finish_success(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    run_id = record_run_start(conn)
+    record_run_finish(conn, run_id, succeeded=True, article_count=42, error=None)
+    row = conn.execute(
+        "SELECT finished_at, succeeded, article_count, error FROM generation_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row["finished_at"] is not None
+    assert row["succeeded"] == 1
+    assert row["article_count"] == 42
+    assert row["error"] is None
+    conn.close()
+
+
+def test_record_run_finish_failure(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    run_id = record_run_start(conn)
+    record_run_finish(conn, run_id, succeeded=False, article_count=None, error="boom")
+    row = conn.execute(
+        "SELECT succeeded, article_count, error FROM generation_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row["succeeded"] == 0
+    assert row["article_count"] is None
+    assert row["error"] == "boom"
     conn.close()
