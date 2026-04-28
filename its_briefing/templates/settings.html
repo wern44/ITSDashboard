@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings — ITS Briefing</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    html, body { font-family: 'Inter', system-ui, sans-serif; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="h-full bg-slate-900 text-slate-100">
+  <div class="max-w-2xl mx-auto px-6 py-10">
+    <header class="mb-8 border-b border-slate-800 pb-4 flex items-center justify-between">
+      <h1 class="text-2xl font-bold text-cyan-400">Settings</h1>
+      <a href="/" class="text-sm text-slate-400 hover:text-cyan-300">← Back to briefing</a>
+    </header>
+
+    {% if saved %}
+      <div class="mb-6 p-3 rounded bg-emerald-900/40 border border-emerald-700 text-emerald-200 text-sm">
+        Settings saved.
+      </div>
+    {% endif %}
+    {% if error %}
+      <div class="mb-6 p-3 rounded bg-red-900/40 border border-red-700 text-red-200 text-sm">
+        {{ error }}
+      </div>
+    {% endif %}
+
+    <form method="POST" action="/settings" class="space-y-6">
+      <fieldset class="rounded-lg border border-slate-800 bg-slate-800/40 p-5">
+        <legend class="px-2 text-sm uppercase tracking-wider text-slate-400">LLM Provider</legend>
+        <div class="flex gap-6 mt-2">
+          <label class="flex items-center gap-2">
+            <input type="radio" name="llm_provider" value="ollama" {% if settings.llm_provider == 'ollama' %}checked{% endif %}>
+            Ollama
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" name="llm_provider" value="lmstudio" {% if settings.llm_provider == 'lmstudio' %}checked{% endif %}>
+            LM Studio
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="rounded-lg border border-slate-800 bg-slate-800/40 p-5 space-y-4">
+        <legend class="px-2 text-sm uppercase tracking-wider text-slate-400">Endpoint</legend>
+        <label class="block">
+          <span class="text-sm text-slate-400">Base URL</span>
+          <input id="base_url" name="llm_base_url" type="text" value="{{ settings.llm_base_url }}"
+                 class="mt-1 w-full rounded bg-slate-900 border border-slate-700 p-2 mono text-sm">
+        </label>
+        <label class="block">
+          <span class="text-sm text-slate-400">Model</span>
+          <input id="model" name="llm_model" type="text" value="{{ settings.llm_model }}"
+                 class="mt-1 w-full rounded bg-slate-900 border border-slate-700 p-2 mono text-sm">
+        </label>
+        <div class="flex items-center gap-3">
+          <button type="button" id="test-conn" class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-sm">
+            Test connection
+          </button>
+          <span id="test-result" class="text-sm"></span>
+        </div>
+      </fieldset>
+
+      <fieldset class="rounded-lg border border-slate-800 bg-slate-800/40 p-5 space-y-4">
+        <legend class="px-2 text-sm uppercase tracking-wider text-slate-400">Schedule</legend>
+        <div class="grid grid-cols-3 gap-3">
+          <label class="block">
+            <span class="text-sm text-slate-400">Hour (0-23)</span>
+            <input name="schedule_hour" type="number" min="0" max="23" value="{{ settings.schedule_hour }}"
+                   class="mt-1 w-full rounded bg-slate-900 border border-slate-700 p-2 mono text-sm">
+          </label>
+          <label class="block">
+            <span class="text-sm text-slate-400">Minute (0-59)</span>
+            <input name="schedule_minute" type="number" min="0" max="59" value="{{ settings.schedule_minute }}"
+                   class="mt-1 w-full rounded bg-slate-900 border border-slate-700 p-2 mono text-sm">
+          </label>
+          <label class="block">
+            <span class="text-sm text-slate-400">Timezone</span>
+            <input name="timezone" type="text" value="{{ settings.timezone }}"
+                   class="mt-1 w-full rounded bg-slate-900 border border-slate-700 p-2 mono text-sm">
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="flex gap-3">
+        <button type="submit" class="px-4 py-2 rounded bg-cyan-500 text-slate-900 font-medium hover:bg-cyan-400">
+          Save settings
+        </button>
+        <a href="/" class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">Cancel</a>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    document.getElementById('test-conn').addEventListener('click', async () => {
+      const provider = document.querySelector('input[name="llm_provider"]:checked').value;
+      const base_url = document.getElementById('base_url').value;
+      const model = document.getElementById('model').value;
+      const out = document.getElementById('test-result');
+      out.textContent = 'Testing…';
+      out.className = 'text-sm text-slate-400';
+      try {
+        const r = await fetch('/api/test-connection', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({provider, base_url, model}),
+        });
+        const j = await r.json();
+        if (j.ok) {
+          out.textContent = `✓ ok (${j.models.length} models, ${j.latency_ms} ms)`;
+          out.className = 'text-sm text-emerald-300';
+        } else {
+          out.textContent = `✗ ${j.error}`;
+          out.className = 'text-sm text-red-300';
+        }
+      } catch (e) {
+        out.textContent = `✗ ${e}`;
+        out.className = 'text-sm text-red-300';
+      }
+    });
+  </script>
+</body>
+</html>

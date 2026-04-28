@@ -4,9 +4,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
-from its_briefing import generate, scheduler, storage
+from its_briefing import db, generate, scheduler, storage
 from its_briefing.config import load_categories, load_sources
 
 logger = logging.getLogger(__name__)
@@ -50,5 +50,16 @@ def create_app() -> Flask:
         if briefing is None:
             return jsonify({"status": "error"}), 500
         return jsonify({"status": "ok", "date": briefing.date.isoformat()})
+
+    @app.route("/settings", methods=["GET"])
+    def settings_get():
+        conn = db.get_connection()
+        try:
+            db.init_schema(conn)
+            settings = db.get_settings(conn)
+        finally:
+            conn.close()
+        saved = request.args.get("saved") == "1"
+        return render_template("settings.html", settings=settings, saved=saved, error=None)
 
     return app

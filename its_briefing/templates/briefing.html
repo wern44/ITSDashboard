@@ -17,11 +17,14 @@
     <header class="mb-10 border-b border-slate-800 pb-6">
       <div class="flex items-baseline justify-between flex-wrap gap-4">
         <h1 class="text-3xl font-bold text-cyan-400">ITS Briefing</h1>
-        {% if briefing %}
-          <div class="text-sm text-slate-400 mono">
-            {{ briefing.date.isoformat() }} · generated {{ briefing.generated_at.strftime('%H:%M UTC') }}
-          </div>
-        {% endif %}
+        <div class="flex items-center gap-4">
+          {% if briefing %}
+            <div class="text-sm text-slate-400 mono">
+              {{ briefing.date.isoformat() }} · generated {{ briefing.generated_at.strftime('%H:%M UTC') }}
+            </div>
+          {% endif %}
+          <a href="/settings" title="Settings" class="text-slate-400 hover:text-cyan-300">⚙</a>
+        </div>
       </div>
       {% if briefing %}
         <div class="mt-4 flex flex-wrap gap-2 text-xs">
