@@ -214,3 +214,38 @@ def test_make_client_dispatches_on_provider() -> None:
     s_lm = _settings("lmstudio", "http://localhost:1234")
     assert isinstance(make_client(s_ollama), OllamaClient)
     assert isinstance(make_client(s_lm), LMStudioClient)
+
+
+# ---------- code-fence stripping (Gemma via LM Studio wraps JSON in ```json ... ```) ----------
+
+def test_classify_article_strips_markdown_code_fences(httpx_mock: HTTPXMock) -> None:
+    """Gemma wraps JSON in ```json ... ``` even when asked for raw JSON."""
+    fenced = '```json\n{"category": "0-Day"}\n```'
+    httpx_mock.add_response(
+        url="http://localhost:1234/v1/chat/completions",
+        json={"choices": [{"message": {"content": fenced}}]},
+    )
+    result = classify_article(
+        _article(), _categories(), _settings("lmstudio", "http://localhost:1234")
+    )
+    assert result == "0-Day"
+
+
+def test_build_summary_strips_markdown_code_fences(httpx_mock: HTTPXMock) -> None:
+    structured = {
+        "critical_vulnerabilities": [{"text": "x", "article_ids": ["id1"]}],
+        "active_threats": [],
+        "notable_incidents": [],
+        "strategic_policy": [],
+    }
+    fenced = "```json\n" + json.dumps(structured) + "\n```"
+    httpx_mock.add_response(
+        url="http://localhost:1234/v1/chat/completions",
+        json={"choices": [{"message": {"content": fenced}}]},
+    )
+    s = build_summary(
+        _articles(),
+        _settings("lmstudio", "http://localhost:1234"),
+        target_date=date(2026, 4, 7),
+    )
+    assert s.critical_vulnerabilities[0].text == "x"

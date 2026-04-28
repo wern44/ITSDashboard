@@ -96,6 +96,22 @@ def make_client(settings: Settings) -> LLMClient:
     return LMStudioClient(settings.llm_base_url, settings.llm_model)
 
 
+def _strip_code_fences(text: str) -> str:
+    """Strip Markdown code fences from an LLM response.
+
+    Some models (notably Gemma via LM Studio) wrap structured output in
+    ```json ... ``` or ``` ... ``` even when the prompt asks for raw JSON.
+    """
+    s = text.strip()
+    if s.startswith("```"):
+        first_newline = s.find("\n")
+        if first_newline != -1:
+            s = s[first_newline + 1 :]
+        if s.endswith("```"):
+            s = s[:-3]
+    return s.strip()
+
+
 def _classification_prompt(article: Article, categories: list[Category]) -> str:
     cat_lines = "\n".join(f"- {c.name}: {c.description}" for c in categories)
     return (
@@ -115,7 +131,7 @@ def classify_article(
     client = make_client(settings)
     try:
         content = client.chat(_classification_prompt(article, categories))
-        parsed = json.loads(content)
+        parsed = json.loads(_strip_code_fences(content))
         chosen = parsed.get("category", "")
     except (LLMClientError, json.JSONDecodeError, KeyError, TypeError) as exc:
         logger.warning("Classification failed for %s: %s", article.id, exc)
@@ -155,7 +171,7 @@ def _summary_prompt(articles: list[Article]) -> str:
 def _try_build_summary(articles: list[Article], settings: Settings) -> ExecutiveSummary:
     client = make_client(settings)
     content = client.chat(_summary_prompt(articles))
-    parsed = json.loads(content)
+    parsed = json.loads(_strip_code_fences(content))
     return ExecutiveSummary.model_validate(parsed)
 
 
