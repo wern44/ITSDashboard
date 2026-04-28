@@ -68,7 +68,6 @@ class LMStudioClient:
                 f"{self.base_url}/v1/chat/completions",
                 json={
                     "model": self.model,
-                    "response_format": {"type": "json_object"},
                     "messages": [{"role": "user", "content": prompt}],
                 },
                 timeout=LLM_TIMEOUT_SECONDS,
