@@ -84,6 +84,8 @@ The DB also stores articles (with cross-day dedup via `id = sha256(link)[:16]`),
 
 Two LLM clients live in `llm.py`: `OllamaClient` (POST /api/chat, reads `data["message"]["content"]`) and `LMStudioClient` (POST /v1/chat/completions, reads `data["choices"][0]["message"]["content"]`). `make_client(settings)` selects per `settings.llm_provider`. Adding a third provider means adding a class with `chat(prompt) -> str` and `list_models() -> list[str]`.
 
+**LM Studio context-length gotcha.** The summary prompt concatenates ~50 articles (~5k tokens). LM Studio loads each model with a fixed `n_ctx` (default 4096), and exceeds-context returns HTTP 400 with `n_keep > n_ctx`. Load gemma (or whichever model) with at least an 8k context in LM Studio's model loader, or expect `build_summary` to fall back to its placeholder. The 400 body is now surfaced through `LLMClientError` so this shows up clearly in the logs instead of a bare "400 Bad Request".
+
 ### Article IDs are stable across runs
 
 `Article.make_id(link)` returns `sha256(link)[:16]`. This deterministic derivation is what allows the executive summary's bullet citations (`bullet.article_ids`) to deep-link to articles in the rendered HTML via `#article-{id}` anchors.

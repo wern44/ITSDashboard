@@ -21,6 +21,20 @@ class LLMClientError(Exception):
     """Raised by an LLM client when a chat call fails for any reason."""
 
 
+def _raise_for_status_with_body(response: httpx.Response) -> None:
+    """Like response.raise_for_status() but includes the response body in the message.
+
+    Servers like LM Studio return useful diagnostics in the 400 body
+    (e.g. context-length-exceeded). The default httpx error message hides them.
+    """
+    if response.is_success:
+        return
+    body = response.text[:500] if response.text else ""
+    raise LLMClientError(
+        f"HTTP {response.status_code} from {response.request.url}: {body}"
+    )
+
+
 class OllamaClient:
     """Client for Ollama's native /api/chat endpoint."""
 
@@ -40,7 +54,7 @@ class OllamaClient:
                 },
                 timeout=LLM_TIMEOUT_SECONDS,
             )
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
             data = response.json()
             return data["message"]["content"]
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
@@ -49,7 +63,7 @@ class OllamaClient:
     def list_models(self) -> list[str]:
         try:
             response = httpx.get(f"{self.base_url}/api/tags", timeout=5)
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
             return [m["name"] for m in response.json().get("models", [])]
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             raise LLMClientError(str(exc)) from exc
@@ -72,7 +86,7 @@ class LMStudioClient:
                 },
                 timeout=LLM_TIMEOUT_SECONDS,
             )
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
             data = response.json()
             return data["choices"][0]["message"]["content"]
         except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError) as exc:
@@ -81,7 +95,7 @@ class LMStudioClient:
     def list_models(self) -> list[str]:
         try:
             response = httpx.get(f"{self.base_url}/v1/models", timeout=5)
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
             return [m["id"] for m in response.json().get("data", [])]
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             raise LLMClientError(str(exc)) from exc
