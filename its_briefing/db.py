@@ -1,9 +1,12 @@
 """SQLite-backed persistence: connection helper, schema, and CRUD."""
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+from its_briefing.config import Settings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "cache" / "its_briefing.db"
@@ -85,4 +88,52 @@ def init_schema(conn: sqlite3.Connection) -> None:
     existing = conn.execute("SELECT version FROM schema_version").fetchone()
     if existing is None:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+    conn.commit()
+
+
+_SETTINGS_KEYS: tuple[str, ...] = (
+    "llm_provider",
+    "llm_base_url",
+    "llm_model",
+    "timezone",
+    "schedule_hour",
+    "schedule_minute",
+    "flask_host",
+    "flask_port",
+    "log_level",
+)
+
+
+def seed_settings_from_env(conn: sqlite3.Connection, env_settings: Settings) -> None:
+    """Populate `settings` from env-derived defaults if (and only if) the table is empty."""
+    count = conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0]
+    if count > 0:
+        return
+    payload = {k: getattr(env_settings, k) for k in _SETTINGS_KEYS}
+    conn.executemany(
+        "INSERT INTO settings (key, value) VALUES (?, ?)",
+        [(k, json.dumps(v)) for k, v in payload.items()],
+    )
+    conn.commit()
+
+
+def get_settings(conn: sqlite3.Connection) -> Settings:
+    """Read current settings from the DB. Raises if not seeded."""
+    rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    if not rows:
+        raise RuntimeError("settings table is empty; call seed_settings_from_env() first")
+    data: dict[str, Any] = {row["key"]: json.loads(row["value"]) for row in rows}
+    return Settings(**{k: data[k] for k in _SETTINGS_KEYS})
+
+
+def update_settings(conn: sqlite3.Connection, partial: dict[str, Any]) -> None:
+    """Upsert one or more settings keys. Raises KeyError on unknown keys."""
+    unknown = set(partial) - set(_SETTINGS_KEYS)
+    if unknown:
+        raise KeyError(f"unknown settings keys: {sorted(unknown)}")
+    conn.executemany(
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [(k, json.dumps(v)) for k, v in partial.items()],
+    )
     conn.commit()
