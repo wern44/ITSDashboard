@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pytest_httpx import HTTPXMock
 
 from its_briefing import db
 from its_briefing.app import create_app
@@ -122,3 +123,54 @@ def test_post_settings_rejects_out_of_range_hour(client):
         follow_redirects=False,
     )
     assert r.status_code == 400
+
+
+def test_test_connection_ollama_success(client, httpx_mock: HTTPXMock):
+    httpx_mock.add_response(
+        url="http://localhost:11434/api/tags",
+        json={"models": [{"name": "llama3.1:8b"}, {"name": "mistral:7b"}]},
+    )
+    r = client.post(
+        "/api/test-connection",
+        json={"provider": "ollama", "base_url": "http://localhost:11434", "model": "llama3.1:8b"},
+    )
+    j = r.get_json()
+    assert j["ok"] is True
+    assert j["models"] == ["llama3.1:8b", "mistral:7b"]
+    assert isinstance(j["latency_ms"], int)
+
+
+def test_test_connection_lmstudio_success(client, httpx_mock: HTTPXMock):
+    httpx_mock.add_response(
+        url="http://localhost:1234/v1/models",
+        json={"data": [{"id": "google/gemma-4-26b-a4b"}]},
+    )
+    r = client.post(
+        "/api/test-connection",
+        json={"provider": "lmstudio", "base_url": "http://localhost:1234", "model": "google/gemma-4-26b-a4b"},
+    )
+    j = r.get_json()
+    assert j["ok"] is True
+    assert j["models"] == ["google/gemma-4-26b-a4b"]
+
+
+def test_test_connection_failure_returns_error_payload(client, httpx_mock: HTTPXMock):
+    httpx_mock.add_response(url="http://localhost:11434/api/tags", status_code=500)
+    r = client.post(
+        "/api/test-connection",
+        json={"provider": "ollama", "base_url": "http://localhost:11434", "model": "x"},
+    )
+    j = r.get_json()
+    assert j["ok"] is False
+    assert j["error"]
+    assert j["models"] == []
+
+
+def test_test_connection_rejects_bad_provider(client):
+    r = client.post(
+        "/api/test-connection",
+        json={"provider": "bogus", "base_url": "http://x", "model": "y"},
+    )
+    j = r.get_json()
+    assert j["ok"] is False
+    assert "provider" in j["error"].lower()

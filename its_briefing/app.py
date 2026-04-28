@@ -51,6 +51,55 @@ def create_app() -> Flask:
             return jsonify({"status": "error"}), 500
         return jsonify({"status": "ok", "date": briefing.date.isoformat()})
 
+    @app.route("/api/test-connection", methods=["POST"])
+    def test_connection():
+        import time
+        from its_briefing.llm import LLMClientError, LMStudioClient, OllamaClient
+
+        body = request.get_json(silent=True) or {}
+        provider = body.get("provider", "")
+        base_url = (body.get("base_url") or "").strip()
+        model = (body.get("model") or "").strip()
+
+        if provider not in ("ollama", "lmstudio"):
+            return jsonify({
+                "ok": False,
+                "models": [],
+                "error": "provider must be 'ollama' or 'lmstudio'",
+                "latency_ms": 0,
+            })
+        if not base_url:
+            return jsonify({
+                "ok": False,
+                "models": [],
+                "error": "base_url is required",
+                "latency_ms": 0,
+            })
+
+        client = (
+            OllamaClient(base_url, model)
+            if provider == "ollama"
+            else LMStudioClient(base_url, model)
+        )
+        start = time.perf_counter()
+        try:
+            models = client.list_models()
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return jsonify({
+                "ok": True,
+                "models": models,
+                "error": None,
+                "latency_ms": latency_ms,
+            })
+        except LLMClientError as exc:
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            return jsonify({
+                "ok": False,
+                "models": [],
+                "error": str(exc),
+                "latency_ms": latency_ms,
+            })
+
     @app.route("/settings", methods=["GET"])
     def settings_get():
         conn = db.get_connection()
