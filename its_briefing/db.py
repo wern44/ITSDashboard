@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import date as date_type, datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from its_briefing.config import Settings
+from its_briefing.models import Article, Briefing, ExecutiveSummary
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "cache" / "its_briefing.db"
@@ -137,3 +139,120 @@ def update_settings(conn: sqlite3.Connection, partial: dict[str, Any]) -> None:
         [(k, json.dumps(v)) for k, v in partial.items()],
     )
     conn.commit()
+
+
+def upsert_article(
+    conn: sqlite3.Connection, article: Article, first_seen: datetime
+) -> None:
+    """Insert or update an article. `first_seen` is set only on first insert."""
+    conn.execute(
+        """
+        INSERT INTO articles
+            (id, source, source_lang, title, link, published, summary, category, first_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            source = excluded.source,
+            source_lang = excluded.source_lang,
+            title = excluded.title,
+            link = excluded.link,
+            published = excluded.published,
+            summary = excluded.summary,
+            category = excluded.category
+        """,
+        (
+            article.id,
+            article.source,
+            article.source_lang,
+            article.title,
+            article.link,
+            article.published.isoformat(),
+            article.summary,
+            article.category,
+            first_seen.isoformat(),
+        ),
+    )
+
+
+def save_briefing(conn: sqlite3.Connection, briefing: Briefing) -> None:
+    """Persist a briefing in a single transaction.
+
+    Upserts every article, upserts the briefing row, and replaces the join
+    rows for that date.
+    """
+    try:
+        first_seen = briefing.generated_at
+        for a in briefing.articles:
+            upsert_article(conn, a, first_seen=first_seen)
+
+        conn.execute(
+            """
+            INSERT INTO briefings (date, generated_at, summary_json, failed_sources)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(date) DO UPDATE SET
+                generated_at = excluded.generated_at,
+                summary_json = excluded.summary_json,
+                failed_sources = excluded.failed_sources
+            """,
+            (
+                briefing.date.isoformat(),
+                briefing.generated_at.isoformat(),
+                briefing.summary.model_dump_json(),
+                json.dumps(briefing.failed_sources),
+            ),
+        )
+        conn.execute(
+            "DELETE FROM briefing_articles WHERE briefing_date = ?",
+            (briefing.date.isoformat(),),
+        )
+        conn.executemany(
+            "INSERT INTO briefing_articles (briefing_date, article_id) VALUES (?, ?)",
+            [(briefing.date.isoformat(), a.id) for a in briefing.articles],
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def latest_briefing(conn: sqlite3.Connection) -> Optional[Briefing]:
+    """Return the briefing with the highest date, or None if no briefings exist."""
+    row = conn.execute(
+        "SELECT date, generated_at, summary_json, failed_sources FROM briefings "
+        "ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+
+    article_rows = conn.execute(
+        """
+        SELECT a.id, a.source, a.source_lang, a.title, a.link, a.published, a.summary, a.category
+        FROM articles a
+        JOIN briefing_articles ba ON ba.article_id = a.id
+        WHERE ba.briefing_date = ?
+        ORDER BY a.published DESC
+        """,
+        (row["date"],),
+    ).fetchall()
+
+    articles = [
+        Article(
+            id=ar["id"],
+            source=ar["source"],
+            source_lang=ar["source_lang"],
+            title=ar["title"],
+            link=ar["link"],
+            published=datetime.fromisoformat(ar["published"]),
+            summary=ar["summary"],
+            category=ar["category"],
+        )
+        for ar in article_rows
+    ]
+
+    return Briefing(
+        date=date_type.fromisoformat(row["date"]),
+        generated_at=datetime.fromisoformat(row["generated_at"]),
+        summary=ExecutiveSummary.model_validate_json(row["summary_json"]),
+        articles=articles,
+        failed_sources=json.loads(row["failed_sources"]),
+        article_count=len(articles),
+    )

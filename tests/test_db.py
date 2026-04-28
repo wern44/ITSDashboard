@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -11,9 +12,13 @@ from its_briefing.db import (
     get_connection,
     get_settings,
     init_schema,
+    latest_briefing as db_latest_briefing,
+    save_briefing as db_save_briefing,
     seed_settings_from_env,
     update_settings,
+    upsert_article,
 )
+from its_briefing.models import Article, Briefing, Bullet, ExecutiveSummary
 
 
 def test_get_connection_creates_db_file(tmp_path: Path) -> None:
@@ -116,4 +121,82 @@ def test_update_settings_rejects_unknown_key(tmp_path: Path) -> None:
     seed_settings_from_env(conn, _env_settings())
     with pytest.raises(KeyError):
         update_settings(conn, {"bogus_key": "x"})
+    conn.close()
+
+
+def _make_article(id_: str = "abc12345", link: str = "https://x.example/1") -> Article:
+    return Article(
+        id=id_,
+        source="Test",
+        source_lang="EN",
+        title="A title",
+        link=link,
+        published=datetime(2026, 4, 28, 10, 0, tzinfo=timezone.utc),
+        summary="summary text",
+        category="0-Day",
+    )
+
+
+def _make_briefing(d: date, articles: list[Article]) -> Briefing:
+    return Briefing(
+        date=d,
+        generated_at=datetime(d.year, d.month, d.day, 6, 0, tzinfo=timezone.utc),
+        summary=ExecutiveSummary(
+            critical_vulnerabilities=[Bullet(text="x", article_ids=[a.id for a in articles])]
+        ),
+        articles=articles,
+        failed_sources=["BadFeed"],
+        article_count=len(articles),
+    )
+
+
+def test_upsert_article_inserts_then_updates(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    a = _make_article()
+    upsert_article(conn, a, first_seen=datetime(2026, 4, 28, 5, 0, tzinfo=timezone.utc))
+    a2 = _make_article()
+    a2.category = "Hacks"
+    upsert_article(conn, a2, first_seen=datetime(2026, 4, 29, 5, 0, tzinfo=timezone.utc))
+
+    rows = conn.execute("SELECT id, category, first_seen FROM articles").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["category"] == "Hacks"
+    # first_seen is preserved from the original insert
+    assert rows[0]["first_seen"].startswith("2026-04-28")
+    conn.close()
+
+
+def test_save_briefing_round_trip(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    a = _make_article()
+    b = _make_briefing(date(2026, 4, 28), [a])
+    db_save_briefing(conn, b)
+
+    loaded = db_latest_briefing(conn)
+    assert loaded is not None
+    assert loaded.date == date(2026, 4, 28)
+    assert loaded.article_count == 1
+    assert loaded.articles[0].id == "abc12345"
+    assert loaded.failed_sources == ["BadFeed"]
+    assert loaded.summary.critical_vulnerabilities[0].text == "x"
+    conn.close()
+
+
+def test_latest_briefing_returns_newest(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    a = _make_article()
+    db_save_briefing(conn, _make_briefing(date(2026, 4, 27), [a]))
+    db_save_briefing(conn, _make_briefing(date(2026, 4, 28), [a]))
+    loaded = db_latest_briefing(conn)
+    assert loaded.date == date(2026, 4, 28)
+    conn.close()
+
+
+def test_latest_briefing_returns_none_when_empty(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    assert db_latest_briefing(conn) is None
     conn.close()
