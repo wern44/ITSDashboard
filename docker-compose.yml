@@ -11,14 +11,16 @@ services:
     ports:
       - "127.0.0.1:8089:8089"
 
-    # Bind-mounts: Config (read-only) und Cache (read-write) leben im Host-Dateisystem
+    # Bind-mounts: Config (read-only) und Cache (read-write) liegen
+    # neben der docker-compose.yml im geklonten Repo. So bleibt alles —
+    # Code, Config, Cache und Secrets — in einem Verzeichnis.
     volumes:
-      - /srv/apps/its-briefing/config:/app/config:ro
-      - /srv/apps/its-briefing/cache:/app/cache
+      - ./config:/app/config:ro
+      - ./cache:/app/cache
 
     # .env wird vom Host gelesen, NICHT ins Image gebacken
     env_file:
-      - /srv/apps/its-briefing/.env
+      - ./.env
 
     # Override FLASK_HOST so the app binds to all interfaces inside the
     # container; the host-side `127.0.0.1:8089:8089` mapping still keeps

@@ -22,19 +22,24 @@ Ollama auf separatem Server
 - The container is bound to `127.0.0.1:8089` only — not reachable from the LAN directly.
 - Nginx (already running on the host) routes LAN traffic to it via plain HTTP.
 - Ollama runs on a separate LAN machine. The container reaches it over the network.
-- Persistent state (config, cache, secrets) lives **outside** the cloned repo so updates don't touch user data.
+- **Everything lives inside the cloned repo directory.** Code, config, cache and `.env` are colocated. Bind mounts in `docker-compose.yml` are relative paths (`./config`, `./cache`, `./.env`), so the same compose file works on a developer laptop and on the production server. `git pull` updates the code; `config/`, `cache/` and `.env` are either tracked or ignored, never overwritten.
 
 ## Server Directory Layout
 
+The repo *is* the deployment directory. Pick any path you like — the example below uses `/srv/apps/its-briefing`:
+
 ```
-/srv/apps/
-└── its-briefing/
-    ├── repo/                # git clone of the project (immutable at runtime)
-    ├── config/              # bind-mounted into the container, RW from the host
-    │   ├── sources.yaml
-    │   └── categories.yaml
-    ├── cache/               # bind-mounted into the container, persistent briefings
-    └── .env                 # runtime settings (Ollama URL etc.) — NOT in git
+/srv/apps/its-briefing/         # = git clone of the repo
+├── its_briefing/               # app source (tracked)
+├── config/
+│   ├── sources.yaml            # tracked, edit in place
+│   └── categories.yaml         # tracked, edit in place
+├── cache/                      # gitignored, created at first start, persists briefings + SQLite DB
+├── .env                        # gitignored, copied from .env.example on first deploy
+├── .env.example                # tracked
+├── docker-compose.yml          # tracked, uses relative bind-mount paths
+└── deploy/
+    └── nginx-its-briefing.conf # tracked, copied to /etc/nginx/sites-available/ during setup
 ```
 
 ## Prerequisites
@@ -43,45 +48,41 @@ On the Debian server:
 
 - Docker Engine + the Compose plugin installed (`apt-get install docker.io docker-compose-plugin`)
 - Nginx installed and running (already the case on this server)
-- A reachable Ollama instance on the LAN (separate server, with `llama3.1:8b` or another model pulled)
+- A reachable Ollama or LM Studio instance on the LAN (separate server, with `llama3.1:8b` or another model pulled)
 - An internal hostname or IP that resolves to the Debian server
 
 ## First-Time Deployment
 
 ```bash
-# 1. Verzeichnisse anlegen
-sudo mkdir -p /srv/apps/its-briefing
-sudo chown $USER:$USER /srv/apps/its-briefing
-cd /srv/apps/its-briefing
+# 1. Verzeichnis vorbereiten und Repo direkt dort hin klonen
+sudo mkdir -p /srv/apps
+sudo chown $USER:$USER /srv/apps
+cd /srv/apps
+git clone https://github.com/wern44/ITSDashboard.git its-briefing
+cd its-briefing
 
-# 2. Repo klonen
-git clone <git-url> repo
-cd repo
+# 2. .env anlegen — vor allem LLM_BASE_URL auf den GPU-Server zeigen lassen
+cp .env.example .env
+vim .env
 
-# 3. Persistente Verzeichnisse + Initial-Config
-mkdir -p /srv/apps/its-briefing/config /srv/apps/its-briefing/cache
-cp config/sources.yaml     /srv/apps/its-briefing/config/
-cp config/categories.yaml  /srv/apps/its-briefing/config/
-cp .env.example            /srv/apps/its-briefing/.env
+# 3. cache-Verzeichnis vorab anlegen, damit Docker es nicht als root-owned mountet
+mkdir -p cache
 
-# 4. .env editieren — vor allem OLLAMA_BASE_URL auf den GPU-Server setzen
-vim /srv/apps/its-briefing/.env
-
-# 5. Container bauen + starten
+# 4. Container bauen + starten
 docker compose up -d --build
 
-# 6. Health-Check
+# 5. Health-Check
 docker compose ps                                    # sollte "healthy" zeigen
 curl http://127.0.0.1:8089/health                    # JSON-Response
 docker compose logs -f --tail=50                     # Live-Logs
 # (Strg-C zum Beenden des Log-Tails)
 
-# 7. Nginx-vhost installieren
+# 6. Nginx-vhost installieren
 sudo cp deploy/nginx-its-briefing.conf /etc/nginx/sites-available/its-briefing
 sudo ln -s /etc/nginx/sites-available/its-briefing /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 
-# 8. Im Browser aufrufen
+# 7. Im Browser aufrufen
 # http://its-briefing.intern.local
 ```
 
@@ -95,23 +96,36 @@ If you don't run internal DNS, add a line to `/etc/hosts` on each client machine
 192.168.1.10  its-briefing.intern.local
 ```
 
-## Update Workflow
+## Local Development on Windows / macOS
 
-After pulling new code from upstream:
+The same `docker-compose.yml` works for local testing because all bind-mount paths are relative to the compose file:
 
 ```bash
-cd /srv/apps/its-briefing/repo
+git clone https://github.com/wern44/ITSDashboard.git its-briefing
+cd its-briefing
+cp .env.example .env             # then edit LLM_BASE_URL etc.
+mkdir -p cache
+docker compose up -d --build
+# Open http://127.0.0.1:8089
+```
+
+No `/srv/apps/...` paths required.
+
+## Update Workflow
+
+```bash
+cd /srv/apps/its-briefing
 git pull
 docker compose up -d --build
 ```
 
-`config/`, `cache/` and `.env` remain untouched because they live outside `repo/`.
+`config/` is tracked, so `git pull` will update `sources.yaml` / `categories.yaml` if upstream changes them — review the diff before pulling if you've made local edits. `cache/` and `.env` are gitignored and are never touched by `git pull`.
 
 ## Editing Config (Sources or Categories)
 
 ```bash
 vim /srv/apps/its-briefing/config/sources.yaml
-docker compose -f /srv/apps/its-briefing/repo/docker-compose.yml restart
+docker compose -f /srv/apps/its-briefing/docker-compose.yml restart
 ```
 
 ## Manual Briefing Rebuild
@@ -119,7 +133,7 @@ docker compose -f /srv/apps/its-briefing/repo/docker-compose.yml restart
 Force a fresh briefing right now (without waiting for the 06:00 schedule):
 
 ```bash
-docker compose -f /srv/apps/its-briefing/repo/docker-compose.yml \
+docker compose -f /srv/apps/its-briefing/docker-compose.yml \
     exec its-briefing python -m its_briefing.generate
 ```
 
@@ -127,15 +141,15 @@ Or click the **"Rebuild now"** button in the footer of the web UI.
 
 ## Logs and Troubleshooting
 
-- Container logs: `docker compose -f /srv/apps/its-briefing/repo/docker-compose.yml logs --tail=200`
+- Container logs: `docker compose -f /srv/apps/its-briefing/docker-compose.yml logs --tail=200`
 - Nginx access log: `tail -f /var/log/nginx/its-briefing.access.log`
 - Nginx error log: `tail -f /var/log/nginx/its-briefing.error.log`
 - Health endpoint: `curl http://127.0.0.1:8089/health`
 
 If the container is `unhealthy`:
 1. Check `docker compose logs` for Python tracebacks
-2. Verify `OLLAMA_BASE_URL` in `.env` points at a reachable Ollama server (`curl $OLLAMA_BASE_URL/api/tags` from the host)
-3. Verify the `config/` and `cache/` host directories exist and are owned by UID 1000
+2. Verify `LLM_BASE_URL` in `.env` points at a reachable LLM server (e.g. `curl $LLM_BASE_URL/api/tags` for Ollama)
+3. Verify the `cache/` directory exists and is writable by UID 1000 (see below)
 
 ### Host UID assumption
 
@@ -148,10 +162,10 @@ id $USER
 
 If your UID is not 1000, files written by the container will appear "owned by nobody" from the host. Two options:
 
-1. **Quickest:** add yourself to a group with GID 1000 and adjust the host directory permissions:
+1. **Quickest:** chown the bind-mounted directories to UID 1000:
    ```bash
-   sudo chown -R 1000:1000 /srv/apps/its-briefing/cache
-   sudo chown -R 1000:1000 /srv/apps/its-briefing/config
+   sudo chown -R 1000:1000 cache
+   sudo chown -R 1000:1000 config
    ```
 2. **Cleaner (future):** rebuild the image with a build arg overriding the UID. Not yet implemented in this Dockerfile.
 
@@ -161,8 +175,8 @@ When adding a new app to this server, follow the same pattern:
 
 | Element | Convention |
 |---|---|
-| App directory | `/srv/apps/<app-name>/` |
-| Sub-layout | `repo/`, `config/`, `cache/` (or `data/`), `.env` |
+| App directory | `/srv/apps/<app-name>/` (= `git clone` target) |
+| Sub-layout | Repo at the root; `config/`, `cache/` (or `data/`) and `.env` live alongside `docker-compose.yml` and use **relative** bind-mount paths |
 | Localhost port | Allocated from pool 8080–8099 (see table below) |
 | Compose | `restart: unless-stopped`, `ports: 127.0.0.1:<port>:<port>` |
 | Nginx vhost | `/etc/nginx/sites-available/<app-name>` |
