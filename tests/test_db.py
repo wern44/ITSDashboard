@@ -248,3 +248,17 @@ def test_record_run_finish_failure(tmp_path: Path) -> None:
     assert row["article_count"] is None
     assert row["error"] == "boom"
     conn.close()
+
+
+def test_load_briefing_by_date(tmp_path: Path) -> None:
+    from its_briefing.db import load_briefing as db_load_briefing
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    a = _make_article()
+    db_save_briefing(conn, _make_briefing(date(2026, 4, 27), [a]))
+    db_save_briefing(conn, _make_briefing(date(2026, 4, 28), [a]))
+    loaded = db_load_briefing(conn, date(2026, 4, 27))
+    assert loaded is not None
+    assert loaded.date == date(2026, 4, 27)
+    assert db_load_briefing(conn, date(2026, 1, 1)) is None
+    conn.close()

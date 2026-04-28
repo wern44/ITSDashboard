@@ -214,11 +214,13 @@ def save_briefing(conn: sqlite3.Connection, briefing: Briefing) -> None:
         raise
 
 
-def latest_briefing(conn: sqlite3.Connection) -> Optional[Briefing]:
-    """Return the briefing with the highest date, or None if no briefings exist."""
+def load_briefing(
+    conn: sqlite3.Connection, target_date: date_type
+) -> Optional[Briefing]:
+    """Return the briefing for a specific date, or None if absent."""
     row = conn.execute(
-        "SELECT date, generated_at, summary_json, failed_sources FROM briefings "
-        "ORDER BY date DESC LIMIT 1"
+        "SELECT date, generated_at, summary_json, failed_sources FROM briefings WHERE date = ?",
+        (target_date.isoformat(),),
     ).fetchone()
     if row is None:
         return None
@@ -231,7 +233,7 @@ def latest_briefing(conn: sqlite3.Connection) -> Optional[Briefing]:
         WHERE ba.briefing_date = ?
         ORDER BY a.published DESC
         """,
-        (row["date"],),
+        (target_date.isoformat(),),
     ).fetchall()
 
     articles = [
@@ -249,13 +251,23 @@ def latest_briefing(conn: sqlite3.Connection) -> Optional[Briefing]:
     ]
 
     return Briefing(
-        date=date_type.fromisoformat(row["date"]),
+        date=target_date,
         generated_at=datetime.fromisoformat(row["generated_at"]),
         summary=ExecutiveSummary.model_validate_json(row["summary_json"]),
         articles=articles,
         failed_sources=json.loads(row["failed_sources"]),
         article_count=len(articles),
     )
+
+
+def latest_briefing(conn: sqlite3.Connection) -> Optional[Briefing]:
+    """Return the briefing with the highest date, or None if no briefings exist."""
+    row = conn.execute(
+        "SELECT date FROM briefings ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    return load_briefing(conn, date_type.fromisoformat(row["date"]))
 
 
 def record_run_start(conn: sqlite3.Connection) -> int:

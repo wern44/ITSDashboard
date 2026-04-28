@@ -1,67 +1,69 @@
-"""Tests for its_briefing.storage."""
+"""Tests for its_briefing.storage (DB-backed)."""
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from its_briefing import storage
+from its_briefing.db import get_connection, init_schema
 from its_briefing.models import Article, Briefing, Bullet, ExecutiveSummary
-from its_briefing.storage import latest_briefing, load_briefing, save_briefing
 
 
-def _make_briefing(d: date, link: str = "https://example.com/a") -> Briefing:
-    article = Article(
-        id=Article.make_id(link),
-        source="Test Feed",
+def _briefing(d: date) -> Briefing:
+    a = Article(
+        id="abc12345",
+        source="Test",
         source_lang="EN",
-        title="Title",
-        link=link,
-        published=datetime(2026, 4, 7, 12, 0, 0, tzinfo=timezone.utc),
-        summary="summary",
-        category="IT-Security",
+        title="x",
+        link="https://example.com/x",
+        published=datetime(d.year, d.month, d.day, 9, 0, tzinfo=timezone.utc),
+        summary="x",
+        category="0-Day",
     )
     return Briefing(
         date=d,
-        generated_at=datetime(2026, 4, 7, 6, 0, 0, tzinfo=timezone.utc),
-        summary=ExecutiveSummary(
-            critical_vulnerabilities=[Bullet(text="bullet", article_ids=[article.id])]
-        ),
-        articles=[article],
+        generated_at=datetime(d.year, d.month, d.day, 6, 0, tzinfo=timezone.utc),
+        summary=ExecutiveSummary(critical_vulnerabilities=[Bullet(text="x", article_ids=["abc12345"])]),
+        articles=[a],
         failed_sources=[],
         article_count=1,
     )
 
 
 def test_save_and_load_round_trip(tmp_path: Path) -> None:
-    briefing = _make_briefing(date(2026, 4, 7))
-    save_briefing(briefing, cache_dir=tmp_path)
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    conn.close()
 
-    loaded = load_briefing(date(2026, 4, 7), cache_dir=tmp_path)
-
+    b = _briefing(date(2026, 4, 28))
+    storage.save_briefing(b, db_path=db_path)
+    loaded = storage.load_briefing(date(2026, 4, 28), db_path=db_path)
     assert loaded is not None
-    assert loaded.date == date(2026, 4, 7)
-    assert loaded.article_count == 1
-    assert loaded.articles[0].title == "Title"
+    assert loaded.date == date(2026, 4, 28)
+    assert loaded.articles[0].id == "abc12345"
 
 
-def test_load_missing_returns_none(tmp_path: Path) -> None:
-    assert load_briefing(date(2026, 4, 7), cache_dir=tmp_path) is None
+def test_load_briefing_missing_returns_none(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    conn.close()
+    assert storage.load_briefing(date(2026, 4, 1), db_path=db_path) is None
 
 
-def test_latest_briefing_picks_highest_date(tmp_path: Path) -> None:
-    save_briefing(_make_briefing(date(2026, 4, 5)), cache_dir=tmp_path)
-    save_briefing(_make_briefing(date(2026, 4, 7)), cache_dir=tmp_path)
-    save_briefing(_make_briefing(date(2026, 4, 6)), cache_dir=tmp_path)
-
-    latest = latest_briefing(cache_dir=tmp_path)
-
-    assert latest is not None
-    assert latest.date == date(2026, 4, 7)
-
-
-def test_latest_briefing_empty_dir(tmp_path: Path) -> None:
-    assert latest_briefing(cache_dir=tmp_path) is None
+def test_latest_briefing_returns_newest(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    conn.close()
+    storage.save_briefing(_briefing(date(2026, 4, 27)), db_path=db_path)
+    storage.save_briefing(_briefing(date(2026, 4, 28)), db_path=db_path)
+    loaded = storage.latest_briefing(db_path=db_path)
+    assert loaded.date == date(2026, 4, 28)
 
 
-def test_save_creates_missing_directory(tmp_path: Path) -> None:
-    target = tmp_path / "nested" / "cache"
-    save_briefing(_make_briefing(date(2026, 4, 7)), cache_dir=target)
-
-    assert (target / "briefing-2026-04-07.json").exists()
+def test_latest_briefing_returns_none_when_no_briefings(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    conn.close()
+    assert storage.latest_briefing(db_path=db_path) is None
