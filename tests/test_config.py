@@ -1,4 +1,5 @@
 """Tests for its_briefing.config."""
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -115,3 +116,27 @@ def test_settings_defaults_llm(monkeypatch):
     assert s.llm_provider == "ollama"
     assert s.llm_base_url == "http://localhost:11434"
     assert s.llm_model == "llama3.1:8b"
+
+
+def test_source_defaults_enabled_true():
+    s = Source(name="A", url="https://a/", lang="EN")
+    assert s.enabled is True
+    assert s.last_status is None
+    assert s.last_checked_at is None
+    assert s.last_error is None
+    assert s.last_diagnosis is None
+
+
+def test_source_accepts_health_fields():
+    s = Source(
+        name="A",
+        url="https://a/",
+        lang="EN",
+        enabled=False,
+        last_status="failed",
+        last_checked_at=datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc),
+        last_error="HTTP 503",
+        last_diagnosis="Probably transient.",
+    )
+    assert s.enabled is False
+    assert s.last_status == "failed"

@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,6 +14,11 @@ class Source(BaseModel):
     name: str
     url: str
     lang: str  # "EN" | "DE"
+    enabled: bool = True
+    last_status: Optional[str] = None
+    last_checked_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    last_diagnosis: Optional[str] = None
 
 
 class Category(BaseModel):
