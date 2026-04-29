@@ -201,6 +201,24 @@ def create_app() -> Flask:
 
         return redirect(url_for("settings_get") + "?saved=1")
 
+    @app.route("/api/sources/<int:source_id>/check", methods=["POST"])
+    def api_sources_check(source_id: int):
+        job_id = sources.start_health_check_job([source_id])
+        return jsonify({"job_id": job_id}), 202
+
+    @app.route("/api/sources/check-all", methods=["POST"])
+    def api_sources_check_all():
+        job_id = sources.start_health_check_job(None)
+        return jsonify({"job_id": job_id}), 202
+
+    @app.route("/api/sources/check-status", methods=["GET"])
+    def api_sources_check_status():
+        job_id = request.args.get("job_id", "")
+        job = sources.get_check_job(job_id)
+        if job is None:
+            return jsonify({"error": "unknown job_id"}), 404
+        return jsonify(job)
+
     @app.route("/sources", methods=["GET"])
     def sources_page():
         from its_briefing import db as _db

@@ -236,3 +236,41 @@ def test_delete_api_sources(client):
     assert resp.status_code == 204
     resp = client.get("/api/sources")
     assert not any(s["id"] == sid for s in resp.get_json()["sources"])
+
+
+def test_post_check_returns_job_id(client, monkeypatch):
+    resp = client.post("/api/sources", json={"name": "S", "url": "https://s/", "lang": "EN"})
+    sid = resp.get_json()["source"]["id"]
+    from its_briefing import sources as src_mod
+    monkeypatch.setattr(src_mod, "start_health_check_job", lambda source_ids: "fake-job-id")
+
+    resp = client.post(f"/api/sources/{sid}/check")
+    assert resp.status_code == 202
+    assert resp.get_json()["job_id"] == "fake-job-id"
+
+
+def test_post_check_all_returns_job_id(client, monkeypatch):
+    from its_briefing import sources as src_mod
+    monkeypatch.setattr(src_mod, "start_health_check_job", lambda source_ids: "fake-all")
+    resp = client.post("/api/sources/check-all")
+    assert resp.status_code == 202
+    assert resp.get_json()["job_id"] == "fake-all"
+
+
+def test_get_check_status(client, monkeypatch):
+    from its_briefing import sources as src_mod
+    monkeypatch.setattr(
+        src_mod, "get_check_job",
+        lambda jid: {"state": "done", "results": {1: {"status": "ok", "error": None}}} if jid == "j1" else None,
+    )
+    resp = client.get("/api/sources/check-status?job_id=j1")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["state"] == "done"
+
+
+def test_get_check_status_unknown_job(client, monkeypatch):
+    from its_briefing import sources as src_mod
+    monkeypatch.setattr(src_mod, "get_check_job", lambda jid: None)
+    resp = client.get("/api/sources/check-status?job_id=nope")
+    assert resp.status_code == 404
