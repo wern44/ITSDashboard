@@ -57,3 +57,4 @@ class Briefing(BaseModel):
     articles: list[Article]
     failed_sources: list[str] = Field(default_factory=list)
     article_count: int
+    last_error: Optional[str] = None

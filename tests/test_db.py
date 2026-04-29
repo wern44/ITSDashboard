@@ -513,3 +513,39 @@ def test_v2_to_v3_migration_adds_last_error(tmp_path: Path) -> None:
     conn.close()
     assert "last_error" in cols
     assert version == 3
+
+
+def test_save_and_load_briefing_round_trips_last_error(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    briefing = Briefing(
+        date=date(2026, 4, 29),
+        generated_at=datetime(2026, 4, 29, 6, 0, tzinfo=timezone.utc),
+        summary=ExecutiveSummary(critical_vulnerabilities=[Bullet(text="hi")]),
+        articles=[],
+        failed_sources=[],
+        article_count=0,
+        last_error="HTTP 400 from /v1/chat/completions: n_keep > n_ctx",
+    )
+    db_save_briefing(conn, briefing)
+    loaded = db_latest_briefing(conn)
+    assert loaded is not None
+    assert loaded.last_error == briefing.last_error
+    conn.close()
+
+
+def test_load_briefing_last_error_defaults_to_none(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    briefing = Briefing(
+        date=date(2026, 4, 28),
+        generated_at=datetime(2026, 4, 28, 6, 0, tzinfo=timezone.utc),
+        summary=ExecutiveSummary(),
+        articles=[],
+        failed_sources=[],
+        article_count=0,
+    )
+    db_save_briefing(conn, briefing)
+    loaded = db_latest_briefing(conn)
+    assert loaded.last_error is None
+    conn.close()

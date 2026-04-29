@@ -212,18 +212,20 @@ def save_briefing(conn: sqlite3.Connection, briefing: Briefing) -> None:
 
         conn.execute(
             """
-            INSERT INTO briefings (date, generated_at, summary_json, failed_sources)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO briefings (date, generated_at, summary_json, failed_sources, last_error)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(date) DO UPDATE SET
                 generated_at = excluded.generated_at,
                 summary_json = excluded.summary_json,
-                failed_sources = excluded.failed_sources
+                failed_sources = excluded.failed_sources,
+                last_error = excluded.last_error
             """,
             (
                 briefing.date.isoformat(),
                 briefing.generated_at.isoformat(),
                 briefing.summary.model_dump_json(),
                 json.dumps(briefing.failed_sources),
+                briefing.last_error,
             ),
         )
         conn.execute(
@@ -245,7 +247,8 @@ def load_briefing(
 ) -> Optional[Briefing]:
     """Return the briefing for a specific date, or None if absent."""
     row = conn.execute(
-        "SELECT date, generated_at, summary_json, failed_sources FROM briefings WHERE date = ?",
+        "SELECT date, generated_at, summary_json, failed_sources, last_error "
+        "FROM briefings WHERE date = ?",
         (target_date.isoformat(),),
     ).fetchone()
     if row is None:
@@ -283,6 +286,7 @@ def load_briefing(
         articles=articles,
         failed_sources=json.loads(row["failed_sources"]),
         article_count=len(articles),
+        last_error=row["last_error"],
     )
 
 
