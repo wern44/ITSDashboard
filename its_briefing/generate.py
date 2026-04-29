@@ -32,7 +32,7 @@ def run() -> Optional[Briefing]:
             conn.close()
 
         # --- pipeline ---
-        sources = config.load_sources()
+        sources = config.load_sources(enabled_only=True)
         categories = config.load_categories()
 
         logger.info("Fetching %d sources...", len(sources))
@@ -40,6 +40,30 @@ def run() -> Optional[Briefing]:
         logger.info(
             "Fetched %d articles, %d sources failed", len(articles), len(failed_sources)
         )
+
+        # Back-feed health status into the sources table.
+        try:
+            status_conn = db.get_connection()
+            try:
+                rows = db.list_sources(status_conn)
+                name_to_id = {r["name"]: r["id"] for r in rows}
+                failed_set = set(failed_sources)
+                for s in sources:
+                    sid = name_to_id.get(s.name)
+                    if sid is None:
+                        continue
+                    if s.name in failed_set:
+                        db.record_source_check_result(
+                            status_conn, sid, status="failed", error="fetch failed"
+                        )
+                    else:
+                        db.record_source_check_result(
+                            status_conn, sid, status="ok", error=None
+                        )
+            finally:
+                status_conn.close()
+        except Exception:  # noqa: BLE001 -- never break the pipeline on status writes
+            logger.exception("Failed to back-feed source statuses; continuing")
 
         for article in articles:
             article.category = llm.classify_article(article, categories, settings)

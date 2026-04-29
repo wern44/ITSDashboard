@@ -8,7 +8,7 @@ import pytest
 
 from its_briefing import generate
 from its_briefing.config import Settings
-from its_briefing.db import get_connection, init_schema, seed_settings_from_env
+from its_briefing.db import create_source, get_connection, init_schema, list_sources, seed_settings_from_env
 from its_briefing.models import Article, ExecutiveSummary
 
 
@@ -141,3 +141,59 @@ def test_run_returns_none_when_db_setup_fails(tmp_path: Path, monkeypatch) -> No
 
     result = generate.run()
     assert result is None
+
+
+def test_run_uses_only_enabled_sources(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "test.db"
+    _seed_db(db_path)
+    _patch_db_paths(monkeypatch, db_path)
+
+    conn = get_connection(db_path)
+    create_source(conn, name="Enabled", url="https://a/", lang="EN", enabled=True)
+    create_source(conn, name="Disabled", url="https://b/", lang="EN", enabled=False)
+    conn.close()
+
+    captured: list = []
+    def fake_fetch_all(sources):
+        captured.extend(sources)
+        return ([], [])
+    monkeypatch.setattr(generate.fetch, "fetch_all", fake_fetch_all)
+    monkeypatch.setattr(generate.llm, "classify_article", lambda *a, **k: "Uncategorized")
+    monkeypatch.setattr(
+        generate.llm, "build_summary",
+        lambda articles, settings, target_date: ExecutiveSummary(),
+    )
+
+    generate.run()
+    names = {s.name for s in captured}
+    assert names == {"Enabled"}
+
+
+def test_run_back_feeds_source_statuses(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "test.db"
+    _seed_db(db_path)
+    _patch_db_paths(monkeypatch, db_path)
+
+    conn = get_connection(db_path)
+    sid_ok = create_source(conn, name="GoodFeed", url="https://a/", lang="EN", enabled=True)
+    sid_bad = create_source(conn, name="BadFeed", url="https://b/", lang="EN", enabled=True)
+    conn.close()
+
+    monkeypatch.setattr(
+        generate.fetch, "fetch_all", lambda sources: ([_make_article("a1")], ["BadFeed"])
+    )
+    monkeypatch.setattr(generate.llm, "classify_article", lambda *a, **k: "Uncategorized")
+    monkeypatch.setattr(
+        generate.llm, "build_summary",
+        lambda articles, settings, target_date: ExecutiveSummary(),
+    )
+
+    generate.run()
+
+    conn = get_connection(db_path)
+    rows = {r["name"]: dict(r) for r in list_sources(conn)}
+    conn.close()
+    assert rows["GoodFeed"]["last_status"] == "ok"
+    assert rows["GoodFeed"]["last_error"] is None
+    assert rows["BadFeed"]["last_status"] == "failed"
+    assert rows["BadFeed"]["last_error"] is not None
