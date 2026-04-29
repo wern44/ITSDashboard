@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import yaml
 from datetime import date as date_type, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -422,5 +423,37 @@ def record_source_check_result(
         WHERE id = ?
         """,
         (status, now, error, now, source_id),
+    )
+    conn.commit()
+
+
+def seed_sources_from_yaml(conn: sqlite3.Connection, yaml_path: Path) -> None:
+    """One-shot seed: insert YAML sources if and only if the table is empty."""
+    count = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
+    if count > 0:
+        return
+    if not yaml_path.exists():
+        return
+    data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    items = (data or {}).get("sources", [])
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [
+        (
+            entry["name"],
+            entry["url"],
+            entry["lang"],
+            1,  # enabled
+            now,
+            now,
+        )
+        for entry in items
+    ]
+    conn.executemany(
+        """
+        INSERT INTO sources (name, url, lang, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO NOTHING
+        """,
+        rows,
     )
     conn.commit()

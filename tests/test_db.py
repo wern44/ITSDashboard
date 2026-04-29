@@ -423,3 +423,51 @@ def test_record_source_check_result_keeps_diagnosis_when_status_unchanged(tmp_pa
     row = get_source(conn, sid)
     assert row["last_diagnosis"] == "Likely CDN throttle"
     conn.close()
+
+
+import yaml as _yaml
+from its_briefing.db import seed_sources_from_yaml
+
+
+def _write_sources_yaml(path: Path, items: list[dict]) -> Path:
+    path.write_text(_yaml.safe_dump({"sources": items}), encoding="utf-8")
+    return path
+
+
+def test_seed_sources_from_yaml_inserts_when_empty(tmp_path: Path) -> None:
+    yaml_path = _write_sources_yaml(tmp_path / "sources.yaml", [
+        {"name": "A", "url": "https://a/", "lang": "EN"},
+        {"name": "B", "url": "https://b/", "lang": "DE"},
+    ])
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    seed_sources_from_yaml(conn, yaml_path)
+    rows = list_sources(conn)
+    assert {r["name"] for r in rows} == {"A", "B"}
+    conn.close()
+
+
+def test_seed_sources_from_yaml_idempotent(tmp_path: Path) -> None:
+    yaml_path = _write_sources_yaml(tmp_path / "sources.yaml", [
+        {"name": "A", "url": "https://a/", "lang": "EN"},
+    ])
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    seed_sources_from_yaml(conn, yaml_path)
+    seed_sources_from_yaml(conn, yaml_path)
+    rows = list_sources(conn)
+    assert len(rows) == 1
+    conn.close()
+
+
+def test_seed_sources_from_yaml_skips_when_table_nonempty(tmp_path: Path) -> None:
+    yaml_path = _write_sources_yaml(tmp_path / "sources.yaml", [
+        {"name": "A", "url": "https://a/", "lang": "EN"},
+    ])
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    create_source(conn, name="Existing", url="https://e/", lang="EN", enabled=True)
+    seed_sources_from_yaml(conn, yaml_path)
+    rows = list_sources(conn)
+    assert {r["name"] for r in rows} == {"Existing"}
+    conn.close()

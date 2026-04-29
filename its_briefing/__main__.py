@@ -11,7 +11,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from its_briefing import db, scheduler
+from its_briefing import config, db, scheduler
 from its_briefing.app import create_app
 from its_briefing.config import Settings
 
@@ -25,11 +25,12 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    # First-boot DB init + settings seed.
+    # First-boot DB init + settings + sources seed.
     conn = db.get_connection()
     try:
         db.init_schema(conn)
         db.seed_settings_from_env(conn, env_settings)
+        db.seed_sources_from_yaml(conn, config.DEFAULT_SOURCES_PATH)
         settings = db.get_settings(conn)
     finally:
         conn.close()
