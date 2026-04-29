@@ -201,6 +201,38 @@ def create_app() -> Flask:
 
         return redirect(url_for("settings_get") + "?saved=1")
 
+    @app.route("/api/sources/<int:source_id>/diagnose", methods=["POST"])
+    def api_sources_diagnose(source_id: int):
+        from its_briefing import db as _db
+        conn = _db.get_connection()
+        try:
+            _db.init_schema(conn)
+            row = _db.get_source(conn, source_id)
+            if row is None:
+                return jsonify({"error": "not found"}), 404
+            settings = _db.get_settings(conn)
+        finally:
+            conn.close()
+
+        if not row["last_error"]:
+            return jsonify({"suggestion": None, "error": "no error to diagnose"}), 400
+
+        suggestion, error = sources.diagnose_failure(
+            source_name=row["name"],
+            url=row["url"],
+            last_error=row["last_error"],
+            settings=settings,
+        )
+
+        if suggestion is not None:
+            conn = _db.get_connection()
+            try:
+                _db.update_source(conn, source_id, {"last_diagnosis": suggestion})
+            finally:
+                conn.close()
+
+        return jsonify({"suggestion": suggestion, "error": error})
+
     @app.route("/api/sources/<int:source_id>/check", methods=["POST"])
     def api_sources_check(source_id: int):
         job_id = sources.start_health_check_job([source_id])

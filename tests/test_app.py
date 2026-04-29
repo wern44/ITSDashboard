@@ -274,3 +274,49 @@ def test_get_check_status_unknown_job(client, monkeypatch):
     monkeypatch.setattr(src_mod, "get_check_job", lambda jid: None)
     resp = client.get("/api/sources/check-status?job_id=nope")
     assert resp.status_code == 404
+
+
+def test_post_diagnose_persists_suggestion(client, monkeypatch):
+    resp = client.post("/api/sources", json={"name": "D", "url": "https://d/", "lang": "EN"})
+    sid = resp.get_json()["source"]["id"]
+
+    from its_briefing import db as _db
+    conn = _db.get_connection()
+    try:
+        _db.record_source_check_result(conn, sid, status="failed", error="HTTP 503")
+    finally:
+        conn.close()
+
+    from its_briefing import sources as src_mod
+    monkeypatch.setattr(
+        src_mod, "diagnose_failure",
+        lambda **kw: ("Likely throttling — retry in 1h", None),
+    )
+
+    resp = client.post(f"/api/sources/{sid}/diagnose")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert "throttling" in body["suggestion"]
+
+    list_resp = client.get("/api/sources")
+    item = next(s for s in list_resp.get_json()["sources"] if s["id"] == sid)
+    assert "throttling" in (item["last_diagnosis"] or "")
+
+
+def test_post_diagnose_handles_llm_failure(client, monkeypatch):
+    resp = client.post("/api/sources", json={"name": "E", "url": "https://e/", "lang": "EN"})
+    sid = resp.get_json()["source"]["id"]
+    from its_briefing import db as _db
+    conn = _db.get_connection()
+    try:
+        _db.record_source_check_result(conn, sid, status="failed", error="HTTP 503")
+    finally:
+        conn.close()
+    from its_briefing import sources as src_mod
+    monkeypatch.setattr(src_mod, "diagnose_failure", lambda **kw: (None, "boom"))
+
+    resp = client.post(f"/api/sources/{sid}/diagnose")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["suggestion"] is None
+    assert body["error"] == "boom"
