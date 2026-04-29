@@ -23,6 +23,9 @@
               {{ briefing.date.isoformat() }} · generated {{ briefing.generated_at.strftime('%H:%M UTC') }}
             </div>
           {% endif %}
+          <button id="rebuild-now" class="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm">
+            Rebuild now
+          </button>
           <div class="relative" id="nav-menu">
             <button id="nav-trigger" class="text-slate-400 hover:text-cyan-300" aria-label="Menu">⚙</button>
             <div id="nav-dropdown" class="hidden absolute right-0 mt-1 w-40 rounded bg-slate-800 border border-slate-700 shadow-lg z-10">
@@ -117,11 +120,8 @@
 
     {% endif %}
 
-    <footer class="mt-12 pt-6 border-t border-slate-800 flex justify-between items-center text-xs text-slate-500">
+    <footer class="mt-12 pt-6 border-t border-slate-800 text-xs text-slate-500">
       <a href="/health" class="hover:text-slate-300">/health</a>
-      <button id="rebuild-now" class="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">
-        Rebuild now
-      </button>
     </footer>
   </div>
 
