@@ -85,9 +85,44 @@ DEFAULT_SOURCES_PATH = PROJECT_ROOT / "config" / "sources.yaml"
 DEFAULT_CATEGORIES_PATH = PROJECT_ROOT / "config" / "categories.yaml"
 
 
-def load_sources(path: Path = DEFAULT_SOURCES_PATH) -> list[Source]:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return [Source(**entry) for entry in data["sources"]]
+def load_sources(
+    path: Optional[Path] = None, *, enabled_only: bool = False
+) -> list[Source]:
+    """Return the configured sources.
+
+    By default reads from the SQLite `sources` table (DB is the source of truth
+    after first-boot seeding). For backwards compatibility with tests that pass
+    an explicit YAML path, falls back to YAML parsing.
+    """
+    if path is not None:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return [Source(**entry) for entry in data["sources"]]
+
+    # Local import to avoid circular import with its_briefing.db.
+    from its_briefing import db as _db
+    conn = _db.get_connection()
+    try:
+        _db.init_schema(conn)
+        rows = _db.list_sources(conn, enabled_only=enabled_only)
+    finally:
+        conn.close()
+    return [
+        Source(
+            name=r["name"],
+            url=r["url"],
+            lang=r["lang"],
+            enabled=bool(r["enabled"]),
+            last_status=r["last_status"],
+            last_checked_at=(
+                datetime.fromisoformat(r["last_checked_at"])
+                if r["last_checked_at"]
+                else None
+            ),
+            last_error=r["last_error"],
+            last_diagnosis=r["last_diagnosis"],
+        )
+        for r in rows
+    ]
 
 
 def load_categories(path: Path = DEFAULT_CATEGORIES_PATH) -> list[Category]:

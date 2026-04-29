@@ -140,3 +140,54 @@ def test_source_accepts_health_fields():
     )
     assert s.enabled is False
     assert s.last_status == "failed"
+
+
+# ---------------------------------------------------------------------------
+# DB-backed load_sources tests
+# ---------------------------------------------------------------------------
+
+from its_briefing import config as config_module  # noqa: E402
+from its_briefing.db import (  # noqa: E402
+    create_source,
+    get_connection,
+    init_schema,
+)
+
+
+def test_load_sources_reads_from_db(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "t.db"
+    monkeypatch.setattr("its_briefing.db.DEFAULT_DB_PATH", db_path)
+    conn = get_connection(db_path)
+    init_schema(conn)
+    create_source(conn, name="A", url="https://a/", lang="EN", enabled=True)
+    create_source(conn, name="B", url="https://b/", lang="DE", enabled=False)
+    conn.close()
+
+    result = load_sources()
+    names = {s.name for s in result}
+    assert names == {"A", "B"}
+
+
+def test_load_sources_enabled_only_true(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "t.db"
+    monkeypatch.setattr("its_briefing.db.DEFAULT_DB_PATH", db_path)
+    conn = get_connection(db_path)
+    init_schema(conn)
+    create_source(conn, name="A", url="https://a/", lang="EN", enabled=True)
+    create_source(conn, name="B", url="https://b/", lang="DE", enabled=False)
+    conn.close()
+
+    result = load_sources(enabled_only=True)
+    names = {s.name for s in result}
+    assert names == {"A"}
+
+
+def test_load_sources_yaml_path_compat_shim(tmp_path: Path) -> None:
+    """Passing a Path keeps the legacy YAML behaviour for tests."""
+    yaml_path = tmp_path / "sources.yaml"
+    yaml_path.write_text(
+        "sources:\n  - name: X\n    url: https://x/\n    lang: EN\n",
+        encoding="utf-8",
+    )
+    result = load_sources(yaml_path)
+    assert [s.name for s in result] == ["X"]
