@@ -57,7 +57,7 @@ def test_run_orchestrates_pipeline(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(generate.fetch, "fetch_all", lambda sources: ([article], []))
     monkeypatch.setattr(generate.llm, "classify_article", lambda *a, **k: "0-Day")
     monkeypatch.setattr(
-        generate.llm, "build_summary", lambda articles, settings, target_date: ExecutiveSummary()
+        generate.llm, "build_summary", lambda articles, settings, target_date: (ExecutiveSummary(), None)
     )
 
     briefing = generate.run()
@@ -88,7 +88,7 @@ def test_run_records_generation_run_on_success(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setattr(generate.fetch, "fetch_all", lambda sources: ([], []))
     monkeypatch.setattr(generate.llm, "classify_article", lambda *a, **k: "Uncategorized")
     monkeypatch.setattr(
-        generate.llm, "build_summary", lambda articles, settings, target_date: ExecutiveSummary()
+        generate.llm, "build_summary", lambda articles, settings, target_date: (ExecutiveSummary(), None)
     )
 
     result = generate.run()
@@ -161,7 +161,7 @@ def test_run_uses_only_enabled_sources(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(generate.llm, "classify_article", lambda *a, **k: "Uncategorized")
     monkeypatch.setattr(
         generate.llm, "build_summary",
-        lambda articles, settings, target_date: ExecutiveSummary(),
+        lambda articles, settings, target_date: (ExecutiveSummary(), None),
     )
 
     generate.run()
@@ -185,7 +185,7 @@ def test_run_back_feeds_source_statuses(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(generate.llm, "classify_article", lambda *a, **k: "Uncategorized")
     monkeypatch.setattr(
         generate.llm, "build_summary",
-        lambda articles, settings, target_date: ExecutiveSummary(),
+        lambda articles, settings, target_date: (ExecutiveSummary(), None),
     )
 
     generate.run()

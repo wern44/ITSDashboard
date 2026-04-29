@@ -70,7 +70,7 @@ def run() -> Optional[Briefing]:
 
         now = datetime.now(timezone.utc)
         target_date = now.date()
-        summary = llm.build_summary(articles, settings, target_date=target_date)
+        summary, _summary_error = llm.build_summary(articles, settings, target_date=target_date)
 
         briefing = Briefing(
             date=target_date,

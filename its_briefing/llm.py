@@ -4,12 +4,13 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date
+from typing import Optional
 
 import httpx
 from pydantic import ValidationError
 
 from its_briefing.config import Category, Settings
-from its_briefing.models import Article, ExecutiveSummary
+from its_briefing.models import Article, Bullet, ExecutiveSummary
 
 logger = logging.getLogger(__name__)
 
@@ -157,45 +158,85 @@ def classify_article(
     return chosen
 
 
-def _summary_prompt(articles: list[Article]) -> str:
+SECTION_CATEGORIES: dict[str, list[str]] = {
+    "critical_vulnerabilities": ["Threats and Vulnerabilities", "0-Day"],
+    "active_threats":           ["0-Day", "Hacks", "Phishing"],
+    "notable_incidents":        ["Hacks"],
+    "strategic_policy":         ["Regulation", "Cyber-Security", "IT-Security"],
+}
+
+_SECTION_DESCRIPTIONS: dict[str, str] = {
+    "critical_vulnerabilities": "CVEs, advisories, urgent patches",
+    "active_threats":           "ongoing campaigns, malware, phishing, threat actor activity",
+    "notable_incidents":        "confirmed breaches, ransomware victims, data leaks",
+    "strategic_policy":         "regulation, geopolitics, industry trends",
+}
+
+
+def _section_prompt(section: str, articles: list[Article]) -> str:
     article_lines = []
     for a in articles:
-        cat = a.category or "Uncategorized"
         snippet = a.summary[:300].replace("\n", " ")
-        article_lines.append(f"[{a.id}] ({cat}) {a.title} — {snippet}")
+        article_lines.append(f"[{a.id}] {a.title} — {snippet}")
     article_block = "\n".join(article_lines)
+    description = _SECTION_DESCRIPTIONS[section]
     return (
-        "You are a cybersecurity briefing analyst. Read the articles below and produce an "
-        "executive summary in four sections.\n\n"
-        "Each section is a list of bullets. Each bullet has a short text (1-2 sentences) and a "
-        "list of article_ids that support it. Use the bracketed [id] from each article line.\n\n"
-        "Sections:\n"
-        "- critical_vulnerabilities: CVEs, advisories, urgent patches\n"
-        "- active_threats: ongoing campaigns, malware, threat actor activity\n"
-        "- notable_incidents: confirmed breaches, ransomware victims, leaks\n"
-        "- strategic_policy: regulation, geopolitics, industry trends\n\n"
-        "Empty sections are allowed (return an empty list). Be concise.\n\n"
+        "You are a cybersecurity briefing analyst. Read the articles below and produce "
+        f"a list of bullets for the section: {section} ({description}).\n\n"
+        "Each bullet has a short text (1-2 sentences) and a list of article_ids that "
+        "support it. Use the bracketed [id] from each article line. An empty list is "
+        "allowed.\n\n"
         f"Articles:\n{article_block}\n\n"
-        'Respond with JSON only, matching this exact shape:\n'
-        '{"critical_vulnerabilities":[{"text":"...","article_ids":["..."]}],'
-        '"active_threats":[],"notable_incidents":[],"strategic_policy":[]}'
+        'Respond with JSON only: {"bullets":[{"text":"...","article_ids":["..."]}]}'
     )
 
 
-def _try_build_summary(articles: list[Article], settings: Settings) -> ExecutiveSummary:
+def _try_build_section(
+    section: str, articles: list[Article], settings: Settings
+) -> list[Bullet]:
     client = make_client(settings)
-    content = client.chat(_summary_prompt(articles))
+    content = client.chat(_section_prompt(section, articles))
     parsed = json.loads(_strip_code_fences(content))
-    return ExecutiveSummary.model_validate(parsed)
+    bullets_raw = parsed.get("bullets", [])
+    return [Bullet.model_validate(b) for b in bullets_raw]
 
 
 def build_summary(
     articles: list[Article], settings: Settings, target_date: date
-) -> ExecutiveSummary:
-    """Build the executive summary, with one retry and a placeholder fallback."""
-    for attempt in (1, 2):
-        try:
-            return _try_build_summary(articles, settings)
-        except (LLMClientError, json.JSONDecodeError, KeyError, TypeError, ValidationError) as exc:
-            logger.warning("Summary attempt %d failed: %s", attempt, exc)
-    return ExecutiveSummary.placeholder(target_date)
+) -> tuple[ExecutiveSummary, Optional[str]]:
+    """Per-section summarization. Returns (summary, last_error_message_or_None)."""
+    section_results: dict[str, list[Bullet]] = {k: [] for k in SECTION_CATEGORIES}
+    last_error: Optional[str] = None
+    section_failed: dict[str, bool] = {k: False for k in SECTION_CATEGORIES}
+
+    for section, allowed in SECTION_CATEGORIES.items():
+        subset = [a for a in articles if a.category in allowed]
+        if not subset:
+            continue
+        success = False
+        for attempt in (1, 2):
+            try:
+                section_results[section] = _try_build_section(section, subset, settings)
+                success = True
+                break
+            except (LLMClientError, json.JSONDecodeError, KeyError, TypeError, ValidationError) as exc:
+                logger.warning("Section %s attempt %d failed: %s", section, attempt, exc)
+                last_error = str(exc)
+        if not success:
+            section_failed[section] = True
+
+    # If every populated section failed, return the placeholder.
+    populated = [s for s, allowed in SECTION_CATEGORIES.items()
+                 if any(a.category in allowed for a in articles)]
+    if populated and all(section_failed[s] for s in populated):
+        return ExecutiveSummary.placeholder(target_date), last_error
+
+    return (
+        ExecutiveSummary(
+            critical_vulnerabilities=section_results["critical_vulnerabilities"],
+            active_threats=section_results["active_threats"],
+            notable_incidents=section_results["notable_incidents"],
+            strategic_policy=section_results["strategic_policy"],
+        ),
+        last_error,
+    )
