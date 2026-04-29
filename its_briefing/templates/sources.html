@@ -1,5 +1,255 @@
 <!doctype html>
-<html><head><title>Sources</title></head>
-<body><h1>Sources</h1><ul>
-{% for s in sources %}<li>{{ s["name"] }}</li>{% endfor %}
-</ul></body></html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sources — ITS Briefing</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    html, body { font-family: 'Inter', system-ui, sans-serif; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .dot-ok       { background: #10b981; }
+    .dot-failed   { background: #ef4444; }
+    .dot-checking { background: #f59e0b; animation: pulse 1.2s infinite; }
+    .dot-disabled { background: #475569; }
+    .dot-unknown  { background: #cbd5e1; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .row-disabled { opacity: 0.55; }
+  </style>
+</head>
+<body class="h-full bg-slate-900 text-slate-100">
+  <div class="max-w-6xl mx-auto px-6 py-10">
+    <header class="mb-8 border-b border-slate-800 pb-4 flex items-center justify-between">
+      <h1 class="text-2xl font-bold text-cyan-400">Sources</h1>
+      <a href="/" class="text-sm text-slate-400 hover:text-cyan-300">← Back to briefing</a>
+    </header>
+
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div id="counts" class="flex gap-2 text-xs">
+        <button data-filter="ok"       class="filter-btn px-2 py-1 rounded bg-slate-800 text-emerald-300">● <span id="count-ok">0</span> ok</button>
+        <button data-filter="failed"   class="filter-btn px-2 py-1 rounded bg-slate-800 text-red-300">● <span id="count-failed">0</span> failed</button>
+        <button data-filter="checking" class="filter-btn px-2 py-1 rounded bg-slate-800 text-amber-300">○ <span id="count-checking">0</span> checking</button>
+        <button data-filter="all"      class="filter-btn px-2 py-1 rounded bg-slate-800 text-slate-300">all</button>
+      </div>
+      <div class="flex gap-2">
+        <button id="add-btn"       class="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm">+ Add</button>
+        <button id="check-all-btn" class="px-3 py-1.5 rounded bg-cyan-500 text-slate-900 font-medium hover:bg-cyan-400 text-sm">Check all</button>
+      </div>
+    </div>
+
+    <div id="empty-banner" class="hidden mb-4 p-3 rounded bg-slate-800/60 border border-slate-700 text-slate-300 text-sm">
+      Sources have not been checked yet — click <strong>Check all</strong> to verify.
+    </div>
+
+    <div class="rounded-lg border border-slate-800 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-800/60 text-slate-400 uppercase text-[10px] tracking-wider">
+          <tr>
+            <th class="px-3 py-2 w-8"></th>
+            <th class="px-3 py-2 text-left">Name</th>
+            <th class="px-3 py-2 text-left">URL</th>
+            <th class="px-3 py-2 text-left">Lang</th>
+            <th class="px-3 py-2 text-left">Last checked</th>
+            <th class="px-3 py-2 text-left">Last error</th>
+            <th class="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Add/Edit modal -->
+  <div id="modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 w-full max-w-md">
+      <h2 id="modal-title" class="text-lg font-semibold mb-4 text-cyan-300">Add source</h2>
+      <form id="modal-form" class="space-y-3">
+        <input type="hidden" id="m-id">
+        <label class="block">
+          <span class="text-xs text-slate-400">Name</span>
+          <input id="m-name" type="text" class="mt-1 w-full rounded bg-slate-900 border border-slate-700 p-2 text-sm">
+        </label>
+        <label class="block">
+          <span class="text-xs text-slate-400">URL</span>
+          <input id="m-url" type="text" class="mt-1 w-full rounded bg-slate-900 border border-slate-700 p-2 text-sm mono">
+        </label>
+        <div class="flex gap-4 items-center">
+          <label class="text-xs text-slate-400">Lang:</label>
+          <label class="flex items-center gap-1"><input type="radio" name="m-lang" value="EN" checked> EN</label>
+          <label class="flex items-center gap-1"><input type="radio" name="m-lang" value="DE"> DE</label>
+          <label class="flex items-center gap-2 ml-auto"><input id="m-enabled" type="checkbox" checked> Enabled</label>
+        </div>
+        <div id="modal-errors" class="text-xs text-red-300"></div>
+        <div class="flex justify-end gap-2 pt-2">
+          <button type="button" id="modal-cancel" class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-sm">Cancel</button>
+          <button type="submit"                   class="px-3 py-1.5 rounded bg-cyan-500 text-slate-900 hover:bg-cyan-400 text-sm font-medium">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    let SOURCES = [];
+    let activeFilter = "all";
+    let pollTimer = null;
+
+    function fmtRelative(iso) {
+      if (!iso) return "never";
+      const d = new Date(iso);
+      const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+      if (sec < 60) return `${sec}s ago`;
+      if (sec < 3600) return `${Math.floor(sec/60)}m ago`;
+      if (sec < 86400) return `${Math.floor(sec/3600)}h ago`;
+      return `${Math.floor(sec/86400)}d ago`;
+    }
+
+    function dotClass(s) {
+      if (!s.enabled) return "dot-disabled";
+      if (s.last_status === "ok") return "dot-ok";
+      if (s.last_status === "failed") return "dot-failed";
+      if (s.last_status === "checking") return "dot-checking";
+      return "dot-unknown";
+    }
+
+    function escapeHtml(s) {
+      return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+    }
+
+    function render() {
+      const rows = $("#rows");
+      rows.innerHTML = "";
+      let okN = 0, failN = 0, checkN = 0;
+      for (const s of SOURCES) {
+        if (s.enabled && s.last_status === "ok") okN++;
+        if (s.enabled && s.last_status === "failed") failN++;
+        if (s.enabled && s.last_status === "checking") checkN++;
+        if (activeFilter !== "all") {
+          if (activeFilter === "checking" && s.last_status !== "checking") continue;
+          if (activeFilter === "ok"       && (!s.enabled || s.last_status !== "ok")) continue;
+          if (activeFilter === "failed"   && (!s.enabled || s.last_status !== "failed")) continue;
+        }
+        const tr = document.createElement("tr");
+        tr.className = "border-t border-slate-800 hover:bg-slate-800/40 " + (s.enabled ? "" : "row-disabled");
+        tr.innerHTML = `
+          <td class="px-3 py-2"><span class="dot ${dotClass(s)}"></span></td>
+          <td class="px-3 py-2">${escapeHtml(s.name)}${s.enabled ? "" : ' <span class="text-xs text-slate-500">(disabled)</span>'}</td>
+          <td class="px-3 py-2 mono text-xs text-slate-400 truncate max-w-xs" title="${escapeHtml(s.url)}">${escapeHtml(s.url)}</td>
+          <td class="px-3 py-2"><span class="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 mono text-[10px]">${s.lang}</span></td>
+          <td class="px-3 py-2 text-xs text-slate-400" title="${s.last_checked_at || ''}">${fmtRelative(s.last_checked_at)}</td>
+          <td class="px-3 py-2 text-xs text-red-300 truncate max-w-xs" title="${escapeHtml(s.last_error||'')}">${escapeHtml(s.last_error || '')}</td>
+          <td class="px-3 py-2 text-right whitespace-nowrap">
+            <button class="check-one px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs" data-id="${s.id}">Check</button>
+            <button class="edit-one  px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs" data-id="${s.id}">Edit</button>
+            ${s.last_status === "failed" ? `<button class="diag-one px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-amber-300" data-id="${s.id}">Analyze ▾</button>` : ''}
+            <button class="del-one   px-2 py-1 rounded bg-slate-800 hover:bg-red-900/50 text-xs text-red-300" data-id="${s.id}">×</button>
+          </td>`;
+        rows.appendChild(tr);
+
+        if (s.last_diagnosis) {
+          const dr = document.createElement("tr");
+          dr.className = "bg-slate-900/60 border-t border-slate-800";
+          dr.innerHTML = `<td colspan="7" class="px-6 py-3 text-xs text-slate-300">
+            <div class="font-semibold text-slate-200 mb-1">${escapeHtml(s.name)} — Diagnosis</div>
+            <div class="text-slate-400 mb-1">Error: <span class="mono">${escapeHtml(s.last_error||'')}</span></div>
+            <div>🤖 ${escapeHtml(s.last_diagnosis)}</div>
+          </td>`;
+          rows.appendChild(dr);
+        }
+      }
+      $("#count-ok").textContent = okN;
+      $("#count-failed").textContent = failN;
+      $("#count-checking").textContent = checkN;
+      $("#empty-banner").classList.toggle("hidden", SOURCES.some(s => s.last_checked_at));
+    }
+
+    async function loadSources() {
+      const r = await fetch("/api/sources");
+      const j = await r.json();
+      SOURCES = j.sources;
+      render();
+      const anyChecking = SOURCES.some(s => s.last_status === "checking");
+      if (anyChecking && !pollTimer) startPolling();
+      if (!anyChecking && pollTimer) stopPolling();
+    }
+
+    function startPolling() {
+      if (pollTimer) return;
+      pollTimer = setInterval(loadSources, 1000);
+    }
+    function stopPolling() {
+      clearInterval(pollTimer); pollTimer = null;
+    }
+
+    document.querySelectorAll(".filter-btn").forEach(b =>
+      b.addEventListener("click", () => { activeFilter = b.dataset.filter; render(); }));
+
+    $("#check-all-btn").addEventListener("click", async () => {
+      await fetch("/api/sources/check-all", { method: "POST" });
+      startPolling();
+    });
+
+    $("#rows").addEventListener("click", async (e) => {
+      const t = e.target;
+      const id = t.dataset.id;
+      if (!id) return;
+      if (t.classList.contains("check-one")) {
+        await fetch(`/api/sources/${id}/check`, { method: "POST" });
+        startPolling();
+      } else if (t.classList.contains("edit-one")) {
+        const s = SOURCES.find(x => String(x.id) === id);
+        openModal(s);
+      } else if (t.classList.contains("del-one")) {
+        if (!confirm("Delete this source?")) return;
+        await fetch(`/api/sources/${id}`, { method: "DELETE" });
+        loadSources();
+      } else if (t.classList.contains("diag-one")) {
+        t.disabled = true; t.textContent = "Analyzing…";
+        const r = await fetch(`/api/sources/${id}/diagnose`, { method: "POST" });
+        const j = await r.json();
+        if (j.suggestion) loadSources();
+        else alert("Couldn't analyze: " + (j.error || "unknown"));
+      }
+    });
+
+    function openModal(src) {
+      $("#modal-title").textContent = src ? "Edit source" : "Add source";
+      $("#m-id").value = src ? src.id : "";
+      $("#m-name").value = src ? src.name : "";
+      $("#m-url").value = src ? src.url : "";
+      document.querySelector(`input[name="m-lang"][value="${src ? src.lang : 'EN'}"]`).checked = true;
+      $("#m-enabled").checked = src ? src.enabled : true;
+      $("#modal-errors").textContent = "";
+      $("#modal").classList.remove("hidden");
+    }
+
+    $("#add-btn").addEventListener("click", () => openModal(null));
+    $("#modal-cancel").addEventListener("click", () => $("#modal").classList.add("hidden"));
+
+    $("#modal-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const id = $("#m-id").value;
+      const payload = {
+        name: $("#m-name").value.trim(),
+        url: $("#m-url").value.trim(),
+        lang: document.querySelector('input[name="m-lang"]:checked').value,
+        enabled: $("#m-enabled").checked,
+      };
+      const url = id ? `/api/sources/${id}` : "/api/sources";
+      const method = id ? "PATCH" : "POST";
+      const r = await fetch(url, { method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload) });
+      if (!r.ok) {
+        const j = await r.json();
+        $("#modal-errors").textContent = (j.errors || ["error"]).join("; ");
+        return;
+      }
+      $("#modal").classList.add("hidden");
+      loadSources();
+    });
+
+    loadSources();
+  </script>
+</body>
+</html>
