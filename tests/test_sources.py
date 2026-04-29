@@ -118,3 +118,49 @@ def test_health_check_persists_results(tmp_path: Path, monkeypatch, httpx_mock: 
 
 def test_get_check_job_returns_none_for_unknown_id() -> None:
     assert get_check_job("does-not-exist") is None
+
+
+# ---------------------------------------------------------------------------
+# Task 14: diagnose_failure
+# ---------------------------------------------------------------------------
+
+from its_briefing.sources import diagnose_failure
+from its_briefing.config import Settings
+
+
+def _settings() -> Settings:
+    return Settings(
+        llm_provider="ollama",
+        llm_base_url="http://localhost:11434",
+        llm_model="x",
+        timezone="UTC",
+        schedule_hour=6,
+        schedule_minute=0,
+        flask_host="127.0.0.1",
+        flask_port=8089,
+        log_level="INFO",
+    )
+
+
+def test_diagnose_failure_returns_suggestion(httpx_mock: HTTPXMock):
+    httpx_mock.add_response(
+        url="http://localhost:11434/api/chat",
+        json={"message": {"content": '{"likely_cause":"throttling","suggested_fix":"retry"}'}},
+    )
+    suggestion, error = diagnose_failure(
+        source_name="X", url="https://x/", last_error="HTTP 503", settings=_settings()
+    )
+    assert error is None
+    assert "throttling" in suggestion
+    assert "retry" in suggestion
+
+
+def test_diagnose_failure_returns_error_when_llm_fails(httpx_mock: HTTPXMock):
+    httpx_mock.add_response(
+        url="http://localhost:11434/api/chat", status_code=500, text="boom"
+    )
+    suggestion, error = diagnose_failure(
+        source_name="X", url="https://x/", last_error="HTTP 503", settings=_settings()
+    )
+    assert suggestion is None
+    assert error is not None
