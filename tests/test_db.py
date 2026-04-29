@@ -471,3 +471,45 @@ def test_seed_sources_from_yaml_skips_when_table_nonempty(tmp_path: Path) -> Non
     rows = list_sources(conn)
     assert {r["name"] for r in rows} == {"Existing"}
     conn.close()
+
+
+def test_briefings_last_error_column_exists(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(briefings)").fetchall()}
+    assert "last_error" in cols
+    conn.close()
+
+
+def test_init_schema_bumps_to_v3(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    assert version >= 3
+    conn.close()
+
+
+def test_v2_to_v3_migration_adds_last_error(tmp_path: Path) -> None:
+    db_path = tmp_path / "v2.db"
+    conn = get_connection(db_path)
+    # Build a synthetic v2 (no last_error column).
+    conn.executescript("""
+        CREATE TABLE briefings (
+            date TEXT PRIMARY KEY,
+            generated_at TEXT NOT NULL,
+            summary_json TEXT NOT NULL,
+            failed_sources TEXT NOT NULL
+        );
+        CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+        INSERT INTO schema_version (version) VALUES (2);
+    """)
+    conn.commit()
+    conn.close()
+
+    conn = get_connection(db_path)
+    init_schema(conn)
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(briefings)").fetchall()}
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    conn.close()
+    assert "last_error" in cols
+    assert version == 3

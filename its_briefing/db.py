@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS briefings (
     date           TEXT PRIMARY KEY,
     generated_at   TEXT NOT NULL,
     summary_json   TEXT NOT NULL,
-    failed_sources TEXT NOT NULL
+    failed_sources TEXT NOT NULL,
+    last_error     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS briefing_articles (
@@ -77,7 +78,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 """
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -107,10 +108,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
     current = row["version"] if row else 0
     if current == 0:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-    elif current < SCHEMA_VERSION:
-        # Forward migrations are pure-additive; CREATE TABLE IF NOT EXISTS in
-        # _SCHEMA_SQL has already added the new tables. Just bump the version.
-        conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
+    else:
+        if current < 3:
+            # v2 → v3: add briefings.last_error if missing.
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(briefings)").fetchall()}
+            if "last_error" not in cols:
+                conn.execute("ALTER TABLE briefings ADD COLUMN last_error TEXT")
+        if current < SCHEMA_VERSION:
+            conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
     conn.commit()
 
 
