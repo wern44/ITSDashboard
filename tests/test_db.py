@@ -314,3 +314,112 @@ def test_init_schema_v1_to_v2_migration(tmp_path: Path) -> None:
     conn.close()
     assert version >= 2
     assert "sources" in tables
+
+
+from its_briefing.db import (
+    create_source,
+    delete_source,
+    get_source,
+    list_sources,
+    record_source_check_result,
+    update_source,
+)
+
+
+def _seed_one(conn: sqlite3.Connection) -> int:
+    return create_source(conn, name="Test", url="https://example.com/feed", lang="EN", enabled=True)
+
+
+def test_create_source_returns_id(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    sid = _seed_one(conn)
+    assert sid >= 1
+    conn.close()
+
+
+def test_create_source_unique_name(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    _seed_one(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        _seed_one(conn)
+    conn.close()
+
+
+def test_list_sources_returns_all_when_no_filter(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    create_source(conn, name="A", url="https://a/", lang="EN", enabled=True)
+    create_source(conn, name="B", url="https://b/", lang="DE", enabled=False)
+    rows = list_sources(conn)
+    assert {r["name"] for r in rows} == {"A", "B"}
+    conn.close()
+
+
+def test_list_sources_enabled_only(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    create_source(conn, name="A", url="https://a/", lang="EN", enabled=True)
+    create_source(conn, name="B", url="https://b/", lang="DE", enabled=False)
+    rows = list_sources(conn, enabled_only=True)
+    assert [r["name"] for r in rows] == ["A"]
+    conn.close()
+
+
+def test_update_source_partial(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    sid = _seed_one(conn)
+    update_source(conn, sid, {"enabled": False, "url": "https://new/"})
+    row = get_source(conn, sid)
+    assert row["enabled"] == 0
+    assert row["url"] == "https://new/"
+    assert row["name"] == "Test"  # untouched
+    conn.close()
+
+
+def test_update_source_unknown_field(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    sid = _seed_one(conn)
+    with pytest.raises(KeyError):
+        update_source(conn, sid, {"bogus": 1})
+    conn.close()
+
+
+def test_delete_source(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    sid = _seed_one(conn)
+    delete_source(conn, sid)
+    assert get_source(conn, sid) is None
+    conn.close()
+
+
+def test_record_source_check_result_clears_diagnosis_on_status_change(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    sid = _seed_one(conn)
+    # Seed prior failed state with a diagnosis.
+    record_source_check_result(conn, sid, status="failed", error="HTTP 503")
+    update_source(conn, sid, {"last_diagnosis": "Likely transient. Retry."})
+    # Now flip to ok.
+    record_source_check_result(conn, sid, status="ok", error=None)
+    row = get_source(conn, sid)
+    assert row["last_status"] == "ok"
+    assert row["last_error"] is None
+    assert row["last_diagnosis"] is None
+    conn.close()
+
+
+def test_record_source_check_result_keeps_diagnosis_when_status_unchanged(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "t.db")
+    init_schema(conn)
+    sid = _seed_one(conn)
+    record_source_check_result(conn, sid, status="failed", error="HTTP 503")
+    update_source(conn, sid, {"last_diagnosis": "Likely CDN throttle"})
+    record_source_check_result(conn, sid, status="failed", error="HTTP 503")
+    row = get_source(conn, sid)
+    assert row["last_diagnosis"] == "Likely CDN throttle"
+    conn.close()

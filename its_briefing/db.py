@@ -321,3 +321,106 @@ def record_run_finish(
         ),
     )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Sources CRUD
+# ---------------------------------------------------------------------------
+
+_SOURCE_UPDATABLE_FIELDS: tuple[str, ...] = (
+    "name",
+    "url",
+    "lang",
+    "enabled",
+    "last_status",
+    "last_checked_at",
+    "last_error",
+    "last_diagnosis",
+)
+
+
+def create_source(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    url: str,
+    lang: str,
+    enabled: bool = True,
+) -> int:
+    """Insert a source row. Returns the new id. Raises IntegrityError on duplicate name."""
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        """
+        INSERT INTO sources (name, url, lang, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (name, url, lang, 1 if enabled else 0, now, now),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def get_source(conn: sqlite3.Connection, source_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+
+
+def list_sources(
+    conn: sqlite3.Connection, *, enabled_only: bool = False
+) -> list[sqlite3.Row]:
+    sql = "SELECT * FROM sources"
+    if enabled_only:
+        sql += " WHERE enabled = 1"
+    sql += " ORDER BY name COLLATE NOCASE"
+    return list(conn.execute(sql).fetchall())
+
+
+def update_source(
+    conn: sqlite3.Connection, source_id: int, partial: dict[str, Any]
+) -> None:
+    unknown = set(partial) - set(_SOURCE_UPDATABLE_FIELDS)
+    if unknown:
+        raise KeyError(f"unknown source fields: {sorted(unknown)}")
+    if not partial:
+        return
+    columns = list(partial.keys())
+    values: list[Any] = []
+    for col in columns:
+        v = partial[col]
+        if col == "enabled" and isinstance(v, bool):
+            v = 1 if v else 0
+        values.append(v)
+    values.append(datetime.now(timezone.utc).isoformat())  # updated_at
+    values.append(source_id)
+    set_clause = ", ".join(f"{c} = ?" for c in columns) + ", updated_at = ?"
+    conn.execute(f"UPDATE sources SET {set_clause} WHERE id = ?", values)
+    conn.commit()
+
+
+def delete_source(conn: sqlite3.Connection, source_id: int) -> None:
+    conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+    conn.commit()
+
+
+def record_source_check_result(
+    conn: sqlite3.Connection,
+    source_id: int,
+    *,
+    status: str,
+    error: Optional[str],
+) -> None:
+    """Persist a health-check outcome. Clears last_diagnosis when status changes."""
+    prev = conn.execute(
+        "SELECT last_status FROM sources WHERE id = ?", (source_id,)
+    ).fetchone()
+    prev_status = prev["last_status"] if prev else None
+    now = datetime.now(timezone.utc).isoformat()
+    new_diag_clause = ", last_diagnosis = NULL" if prev_status != status else ""
+    conn.execute(
+        f"""
+        UPDATE sources
+        SET last_status = ?, last_checked_at = ?, last_error = ?, updated_at = ?{new_diag_clause}
+        WHERE id = ?
+        """,
+        (status, now, error, now, source_id),
+    )
+    conn.commit()
