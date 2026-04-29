@@ -23,7 +23,14 @@
               {{ briefing.date.isoformat() }} · generated {{ briefing.generated_at.strftime('%H:%M UTC') }}
             </div>
           {% endif %}
-          <a href="/settings" title="Settings" class="text-slate-400 hover:text-cyan-300">⚙</a>
+          <div class="relative" id="nav-menu">
+            <button id="nav-trigger" class="text-slate-400 hover:text-cyan-300" aria-label="Menu">⚙</button>
+            <div id="nav-dropdown" class="hidden absolute right-0 mt-1 w-40 rounded bg-slate-800 border border-slate-700 shadow-lg z-10">
+              <a href="/sources"  class="block px-3 py-2 text-sm hover:bg-slate-700">Sources</a>
+              <a href="/settings" class="block px-3 py-2 text-sm hover:bg-slate-700">Settings</a>
+              <a href="/health"   class="block px-3 py-2 text-sm hover:bg-slate-700 mono text-slate-400">/health</a>
+            </div>
+          </div>
         </div>
       </div>
       {% if briefing %}
@@ -49,6 +56,11 @@
     {% else %}
 
       <section class="mb-12 rounded-lg border border-slate-800 bg-slate-800/40 p-6">
+        {% if briefing.last_error %}
+          <div class="mb-4 p-3 rounded bg-amber-900/30 border border-amber-800 text-amber-200 text-xs">
+            ⚠ Last summary attempt failed: <code class="mono">{{ briefing.last_error }}</code> — section may be incomplete.
+          </div>
+        {% endif %}
         <h2 class="text-xl font-semibold mb-4 text-cyan-300">Executive Summary</h2>
 
         {% set sections = [
@@ -134,6 +146,15 @@
     document.querySelectorAll('#rebuild-btn, #rebuild-now').forEach(btn => {
       btn.addEventListener('click', () => rebuild(btn));
     });
+    const navTrigger = document.getElementById('nav-trigger');
+    const navDropdown = document.getElementById('nav-dropdown');
+    if (navTrigger && navDropdown) {
+      navTrigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navDropdown.classList.toggle('hidden');
+      });
+      document.addEventListener('click', () => navDropdown.classList.add('hidden'));
+    }
   </script>
 </body>
 </html>
