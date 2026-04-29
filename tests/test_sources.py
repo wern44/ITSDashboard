@@ -56,3 +56,65 @@ def test_health_check_one_failed_on_timeout(httpx_mock: HTTPXMock):
     result = health_check_one(_src())
     assert result.status == "failed"
     assert "connection" in result.error.lower() or "timeout" in result.error.lower()
+
+
+# ---------------------------------------------------------------------------
+# Task 13: background job registry
+# ---------------------------------------------------------------------------
+
+import time
+from pathlib import Path
+
+from its_briefing.db import create_source, get_connection, init_schema, list_sources
+from its_briefing.sources import (
+    get_check_job,
+    start_health_check_job,
+)
+
+
+def test_start_health_check_job_returns_job_id(tmp_path: Path, monkeypatch, httpx_mock: HTTPXMock) -> None:
+    db_path = tmp_path / "t.db"
+    monkeypatch.setattr("its_briefing.db.DEFAULT_DB_PATH", db_path)
+    conn = get_connection(db_path)
+    init_schema(conn)
+    create_source(conn, name="Good", url="https://good/", lang="EN", enabled=True)
+    conn.close()
+
+    httpx_mock.add_response(url="https://good/", content=_valid_atom())
+
+    job_id = start_health_check_job(source_ids=None)  # None = all
+    assert isinstance(job_id, str) and len(job_id) >= 8
+
+    # Wait briefly for the background thread.
+    for _ in range(50):
+        job = get_check_job(job_id)
+        if job["state"] == "done":
+            break
+        time.sleep(0.05)
+    job = get_check_job(job_id)
+    assert job["state"] == "done"
+
+
+def test_health_check_persists_results(tmp_path: Path, monkeypatch, httpx_mock: HTTPXMock) -> None:
+    db_path = tmp_path / "t.db"
+    monkeypatch.setattr("its_briefing.db.DEFAULT_DB_PATH", db_path)
+    conn = get_connection(db_path)
+    init_schema(conn)
+    sid = create_source(conn, name="Good", url="https://good/", lang="EN", enabled=True)
+    conn.close()
+
+    httpx_mock.add_response(url="https://good/", content=_valid_atom())
+    job_id = start_health_check_job(source_ids=[sid])
+    for _ in range(50):
+        if get_check_job(job_id)["state"] == "done":
+            break
+        time.sleep(0.05)
+    conn = get_connection(db_path)
+    row = conn.execute("SELECT last_status, last_error FROM sources WHERE id = ?", (sid,)).fetchone()
+    conn.close()
+    assert row["last_status"] == "ok"
+    assert row["last_error"] is None
+
+
+def test_get_check_job_returns_none_for_unknown_id() -> None:
+    assert get_check_job("does-not-exist") is None
