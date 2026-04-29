@@ -174,3 +174,22 @@ def test_test_connection_rejects_bad_provider(client):
     j = r.get_json()
     assert j["ok"] is False
     assert "provider" in j["error"].lower()
+
+
+def test_get_sources_page(client):
+    resp = client.get("/sources")
+    assert resp.status_code == 200
+    assert b"Sources" in resp.data
+
+
+def test_get_api_sources_returns_list(client):
+    from its_briefing import db as _db
+    conn = _db.get_connection()
+    try:
+        _db.create_source(conn, name="Z", url="https://z/", lang="EN", enabled=True)
+    finally:
+        conn.close()
+    resp = client.get("/api/sources")
+    assert resp.status_code == 200
+    items = resp.get_json()["sources"]
+    assert any(s["name"] == "Z" for s in items)

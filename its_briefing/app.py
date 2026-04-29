@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 
-from its_briefing import db, generate, scheduler, storage
+from its_briefing import db, generate, scheduler, sources, storage
 from its_briefing.config import load_categories, load_sources
 
 logger = logging.getLogger(__name__)
@@ -199,5 +200,41 @@ def create_app() -> Flask:
                 logger.info("Scheduler not running (likely under test); skipping reschedule")
 
         return redirect(url_for("settings_get") + "?saved=1")
+
+    @app.route("/sources", methods=["GET"])
+    def sources_page():
+        from its_briefing import db as _db
+        conn = _db.get_connection()
+        try:
+            _db.init_schema(conn)
+            rows = _db.list_sources(conn)
+        finally:
+            conn.close()
+        return render_template("sources.html", sources=rows)
+
+    @app.route("/api/sources", methods=["GET"])
+    def api_sources_list():
+        from its_briefing import db as _db
+        conn = _db.get_connection()
+        try:
+            _db.init_schema(conn)
+            rows = _db.list_sources(conn)
+        finally:
+            conn.close()
+        items = [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "url": r["url"],
+                "lang": r["lang"],
+                "enabled": bool(r["enabled"]),
+                "last_status": r["last_status"],
+                "last_checked_at": r["last_checked_at"],
+                "last_error": r["last_error"],
+                "last_diagnosis": r["last_diagnosis"],
+            }
+            for r in rows
+        ]
+        return jsonify({"sources": items})
 
     return app
