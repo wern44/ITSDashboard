@@ -70,7 +70,7 @@ def run() -> Optional[Briefing]:
 
         now = datetime.now(timezone.utc)
         target_date = now.date()
-        summary, _summary_error = llm.build_summary(articles, settings, target_date=target_date)
+        summary, summary_error = llm.build_summary(articles, settings, target_date=target_date)
 
         briefing = Briefing(
             date=target_date,
@@ -79,6 +79,7 @@ def run() -> Optional[Briefing]:
             articles=articles,
             failed_sources=failed_sources,
             article_count=len(articles),
+            last_error=summary_error,
         )
 
         storage.save_briefing(briefing)

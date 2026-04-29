@@ -197,3 +197,25 @@ def test_run_back_feeds_source_statuses(tmp_path: Path, monkeypatch) -> None:
     assert rows["GoodFeed"]["last_error"] is None
     assert rows["BadFeed"]["last_status"] == "failed"
     assert rows["BadFeed"]["last_error"] is not None
+
+
+def test_run_persists_summary_error(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "test.db"
+    _seed_db(db_path)
+    _patch_db_paths(monkeypatch, db_path)
+
+    monkeypatch.setattr(generate.fetch, "fetch_all", lambda sources: ([_make_article("a1")], []))
+    monkeypatch.setattr(generate.llm, "classify_article", lambda *a, **k: "0-Day")
+    monkeypatch.setattr(
+        generate.llm, "build_summary",
+        lambda articles, settings, target_date: (ExecutiveSummary(), "HTTP 400: n_keep>n_ctx"),
+    )
+
+    briefing = generate.run()
+    assert briefing is not None
+    assert briefing.last_error == "HTTP 400: n_keep>n_ctx"
+
+    # And it persists.
+    from its_briefing import storage
+    loaded = storage.latest_briefing()
+    assert loaded.last_error == "HTTP 400: n_keep>n_ctx"
