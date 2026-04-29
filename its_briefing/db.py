@@ -56,12 +56,27 @@ CREATE TABLE IF NOT EXISTS generation_runs (
     error         TEXT
 );
 
+CREATE TABLE IF NOT EXISTS sources (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL UNIQUE,
+    url             TEXT NOT NULL,
+    lang            TEXT NOT NULL,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    last_status     TEXT,
+    last_checked_at TEXT,
+    last_error      TEXT,
+    last_diagnosis  TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sources_enabled ON sources(enabled);
+
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
 );
 """
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -85,11 +100,16 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Idempotent schema creation. Sets schema_version to 1 on first init."""
+    """Idempotent schema creation + forward migrations."""
     conn.executescript(_SCHEMA_SQL)
-    existing = conn.execute("SELECT version FROM schema_version").fetchone()
-    if existing is None:
+    row = conn.execute("SELECT version FROM schema_version").fetchone()
+    current = row["version"] if row else 0
+    if current == 0:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+    elif current < SCHEMA_VERSION:
+        # Forward migrations are pure-additive; CREATE TABLE IF NOT EXISTS in
+        # _SCHEMA_SQL has already added the new tables. Just bump the version.
+        conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
     conn.commit()
 
 

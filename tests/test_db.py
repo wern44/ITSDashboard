@@ -63,7 +63,7 @@ def test_init_schema_is_idempotent(tmp_path: Path) -> None:
     init_schema(conn)
     init_schema(conn)  # should not raise
     version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-    assert version == 1
+    assert version >= 1
     conn.close()
 
 
@@ -262,3 +262,55 @@ def test_load_briefing_by_date(tmp_path: Path) -> None:
     assert loaded.date == date(2026, 4, 27)
     assert db_load_briefing(conn, date(2026, 1, 1)) is None
     conn.close()
+
+
+def test_init_schema_creates_sources_table(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert "sources" in tables
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(sources)").fetchall()
+    }
+    assert cols >= {
+        "id", "name", "url", "lang", "enabled",
+        "last_status", "last_checked_at", "last_error", "last_diagnosis",
+        "created_at", "updated_at",
+    }
+    conn.close()
+
+
+def test_init_schema_bumps_to_v2(tmp_path: Path) -> None:
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    assert version >= 2
+    conn.close()
+
+
+def test_init_schema_v1_to_v2_migration(tmp_path: Path) -> None:
+    """A pre-existing v1 DB must upgrade in place without losing data."""
+    db_path = tmp_path / "v1.db"
+    conn = get_connection(db_path)
+    # Create only the v1 schema (no sources table) and stamp version=1.
+    conn.executescript("""
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+        INSERT INTO schema_version (version) VALUES (1);
+    """)
+    conn.commit()
+    conn.close()
+
+    conn = get_connection(db_path)
+    init_schema(conn)
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    conn.close()
+    assert version >= 2
+    assert "sources" in tables
