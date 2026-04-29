@@ -193,3 +193,46 @@ def test_get_api_sources_returns_list(client):
     assert resp.status_code == 200
     items = resp.get_json()["sources"]
     assert any(s["name"] == "Z" for s in items)
+
+
+def test_post_api_sources_creates(client):
+    resp = client.post(
+        "/api/sources",
+        json={"name": "New", "url": "https://n/", "lang": "EN", "enabled": True},
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["source"]["name"] == "New"
+    assert body["source"]["id"] >= 1
+
+
+def test_post_api_sources_validation_errors(client):
+    resp = client.post("/api/sources", json={"name": "", "url": "", "lang": "FR"})
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["errors"]
+
+
+def test_post_api_sources_duplicate_name(client):
+    client.post("/api/sources", json={"name": "Dup", "url": "https://a/", "lang": "EN"})
+    resp = client.post("/api/sources", json={"name": "Dup", "url": "https://b/", "lang": "EN"})
+    assert resp.status_code == 400
+
+
+def test_patch_api_sources(client):
+    resp = client.post("/api/sources", json={"name": "X", "url": "https://x/", "lang": "EN"})
+    sid = resp.get_json()["source"]["id"]
+    resp = client.patch(f"/api/sources/{sid}", json={"enabled": False})
+    assert resp.status_code == 200
+    resp = client.get("/api/sources")
+    item = next(s for s in resp.get_json()["sources"] if s["id"] == sid)
+    assert item["enabled"] is False
+
+
+def test_delete_api_sources(client):
+    resp = client.post("/api/sources", json={"name": "Y", "url": "https://y/", "lang": "EN"})
+    sid = resp.get_json()["source"]["id"]
+    resp = client.delete(f"/api/sources/{sid}")
+    assert resp.status_code == 204
+    resp = client.get("/api/sources")
+    assert not any(s["id"] == sid for s in resp.get_json()["sources"])

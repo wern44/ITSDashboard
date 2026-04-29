@@ -212,6 +212,89 @@ def create_app() -> Flask:
             conn.close()
         return render_template("sources.html", sources=rows)
 
+    def _validate_source_payload(payload: dict, *, partial: bool = False) -> tuple[dict, list[str]]:
+        from urllib.parse import urlparse
+        errors: list[str] = []
+        out: dict = {}
+        if "name" in payload or not partial:
+            name = (payload.get("name") or "").strip()
+            if not name:
+                errors.append("name is required")
+            else:
+                out["name"] = name
+        if "url" in payload or not partial:
+            url = (payload.get("url") or "").strip()
+            parsed = urlparse(url)
+            if not url or not parsed.scheme or not parsed.netloc:
+                errors.append("url must be an absolute http(s) URL")
+            else:
+                out["url"] = url
+        if "lang" in payload or not partial:
+            lang = (payload.get("lang") or "").strip().upper()
+            if lang not in ("EN", "DE"):
+                errors.append("lang must be 'EN' or 'DE'")
+            else:
+                out["lang"] = lang
+        if "enabled" in payload:
+            out["enabled"] = bool(payload["enabled"])
+        return out, errors
+
+    @app.route("/api/sources", methods=["POST"])
+    def api_sources_create():
+        from its_briefing import db as _db
+        payload = request.get_json(silent=True) or {}
+        data, errors = _validate_source_payload(payload, partial=False)
+        if errors:
+            return jsonify({"errors": errors}), 400
+        conn = _db.get_connection()
+        try:
+            _db.init_schema(conn)
+            try:
+                sid = _db.create_source(
+                    conn,
+                    name=data["name"],
+                    url=data["url"],
+                    lang=data["lang"],
+                    enabled=data.get("enabled", True),
+                )
+            except sqlite3.IntegrityError:
+                return jsonify({"errors": ["name must be unique"]}), 400
+            row = _db.get_source(conn, sid)
+        finally:
+            conn.close()
+        return jsonify({"source": dict(row)}), 201
+
+    @app.route("/api/sources/<int:source_id>", methods=["PATCH"])
+    def api_sources_update(source_id: int):
+        from its_briefing import db as _db
+        payload = request.get_json(silent=True) or {}
+        data, errors = _validate_source_payload(payload, partial=True)
+        if errors:
+            return jsonify({"errors": errors}), 400
+        conn = _db.get_connection()
+        try:
+            _db.init_schema(conn)
+            if _db.get_source(conn, source_id) is None:
+                return jsonify({"errors": ["not found"]}), 404
+            try:
+                _db.update_source(conn, source_id, data)
+            except sqlite3.IntegrityError:
+                return jsonify({"errors": ["name must be unique"]}), 400
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
+    @app.route("/api/sources/<int:source_id>", methods=["DELETE"])
+    def api_sources_delete(source_id: int):
+        from its_briefing import db as _db
+        conn = _db.get_connection()
+        try:
+            _db.init_schema(conn)
+            _db.delete_source(conn, source_id)
+        finally:
+            conn.close()
+        return ("", 204)
+
     @app.route("/api/sources", methods=["GET"])
     def api_sources_list():
         from its_briefing import db as _db
